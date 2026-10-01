@@ -14,6 +14,7 @@ const (
 	ExitSuccess = 0
 	ExitGeneral = 1
 	ExitError   = 1
+	ExitUsage   = 128
 	ExitFatal   = 128
 )
 

@@ -151,3 +151,37 @@ func (c *Config) Serialize() []byte {
 	}
 	return buf.Bytes()
 }
+
+// ParseConfigBytes 从字节切片中解析 Git INI 格式配置
+func ParseConfigBytes(data []byte) (*Config, error) {
+	cfg := NewConfig()
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	currentSection := ""
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inner := strings.TrimSpace(line[1 : len(line)-1])
+			if idx := strings.IndexByte(inner, '"'); idx > 0 {
+				secName := strings.TrimSpace(inner[:idx])
+				subName := strings.Trim(strings.TrimSpace(inner[idx:]), "\"")
+				currentSection = fmt.Sprintf("%s.%s", secName, subName)
+			} else {
+				currentSection = inner
+			}
+			continue
+		}
+
+		eqIdx := strings.IndexByte(line, '=')
+		if eqIdx > 0 && currentSection != "" {
+			k := strings.TrimSpace(line[:eqIdx])
+			v := strings.TrimSpace(line[eqIdx+1:])
+			cfg.Set(currentSection, k, v)
+		}
+	}
+	return cfg, scanner.Err()
+}

@@ -181,6 +181,13 @@ func InitRepository(targetDir string, bare bool, initialBranch string) (*Reposit
 // ReadObject 根据哈希读取原始 Git 对象。
 // 优先检索 loose 对象，若未命中则检索 objects/pack 目录下的所有 pack 文件。
 func (r *Repository) ReadObject(h object.Hash) (*object.RawObject, error) {
+	// Git replace 机制：若存在 refs/replace/<hash> 引用，透明重定向至替换目标
+	if r.Refs != nil {
+		if repHash, err := r.Refs.ResolveRef("refs/replace/" + h.String()); err == nil && !repHash.IsZero() {
+			h = repHash
+		}
+	}
+
 	hStr := h.String()
 	loosePath := filepath.Join(r.ObjectsDir, hStr[:2], hStr[2:])
 	if _, err := os.Stat(loosePath); err == nil {
@@ -324,12 +331,18 @@ func (r *Repository) resolveSignature(envName, envEmail, envDate string) object.
 	tz := object.FormatTimezone(when)
 
 	if envDate != "" {
-		// 支持 Unix 时间戳或者标准格式解析
-		if ts, err := strconv.ParseInt(envDate, 10, 64); err == nil {
-			when = time.Unix(ts, 0)
-		} else if parsed, err := time.Parse(time.RFC3339, envDate); err == nil {
-			when = parsed
-			tz = object.FormatTimezone(when)
+		trimmed := strings.TrimPrefix(strings.TrimSpace(envDate), "@")
+		parts := strings.Fields(trimmed)
+		if len(parts) >= 1 {
+			if ts, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+				when = time.Unix(ts, 0)
+				if len(parts) >= 2 {
+					tz = parts[1]
+				}
+			} else if parsed, err := time.Parse(time.RFC3339, envDate); err == nil {
+				when = parsed
+				tz = object.FormatTimezone(when)
+			}
 		}
 	}
 

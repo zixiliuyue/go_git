@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"gogit/internal/hook"
 	"gogit/internal/merge"
 	"gogit/internal/object"
 	"gogit/internal/pack"
@@ -85,6 +86,12 @@ func cmdPush(ctx *Context) int {
 			fmt.Fprintf(ctx.Stderr, "fatal: 未知远端 '%s'\n", remoteName)
 			return ExitFatal
 		}
+	}
+
+	// 运行 pre-push 钩子
+	if err := hook.RunHook(r.GitDir, "pre-push", []string{remoteName, remoteCfg.URL}, nil, nil, ctx.Stdout, ctx.Stderr); err != nil {
+		fmt.Fprintf(ctx.Stderr, "%v\n", err)
+		return ExitError
 	}
 
 	client, err := transport.NewClient(remoteCfg.URL)

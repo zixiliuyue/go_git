@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"gogit/internal/hook"
 	"gogit/internal/object"
 	"gogit/internal/repo"
 	"os"
@@ -51,6 +52,23 @@ func cmdCommit(ctx *Context) int {
 	if message == "" {
 		fmt.Fprintln(ctx.Stderr, "fatal: 请使用 -m <message> 指定提交信息")
 		return ExitFatal
+	}
+
+	// 运行 pre-commit 钩子
+	if err := hook.RunHook(r.GitDir, "pre-commit", nil, nil, nil, ctx.Stdout, ctx.Stderr); err != nil {
+		fmt.Fprintf(ctx.Stderr, "%v\n", err)
+		return ExitError
+	}
+
+	// 运行 commit-msg 钩子（将 message 写入临时文件供 hook 检查或修改）
+	msgFile := filepath.Join(r.GitDir, "COMMIT_EDITMSG")
+	_ = os.WriteFile(msgFile, []byte(message+"\n"), 0644)
+	if err := hook.RunHook(r.GitDir, "commit-msg", []string{msgFile}, nil, nil, ctx.Stdout, ctx.Stderr); err != nil {
+		fmt.Fprintf(ctx.Stderr, "%v\n", err)
+		return ExitError
+	}
+	if editedMsg, err := os.ReadFile(msgFile); err == nil {
+		message = strings.TrimSpace(string(editedMsg))
 	}
 
 	idx, err := r.GetIndex()
@@ -179,6 +197,9 @@ func cmdCommit(ctx *Context) int {
 	} else {
 		fmt.Fprintf(ctx.Stdout, "[%s %s] %s\n", branchName, shortHash, summary)
 	}
+
+	// 运行 post-commit 钩子
+	_ = hook.RunHook(r.GitDir, "post-commit", nil, nil, nil, ctx.Stdout, ctx.Stderr)
 
 	return ExitSuccess
 }

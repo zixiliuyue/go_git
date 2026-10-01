@@ -417,4 +417,161 @@ ok  	gogit/internal/cli	2.073s
 
 **验收结论**：M4 全部通过。Packfile 与 idx v2 双向生成与解析、LibXDiff 增量编解码、pkt-line、side-band 多路复用、Smart HTTP(v1+v2)、Local/SSH/Daemon 协议、CLI 命令（remote, clone, fetch, pull, push）全部实现。与原生 Git 严格互操作且 `git fsck --strict` 零错误通过。
 
+---
+
+## M5: 存储维护、高级能力与总验收
+
+### 验证命令
+```bash
+# 1. 运行 M5 核心功能单元与端到端测试
+go test -v ./internal/maintenance/...
+go test -v ./internal/pack/... -run "TestVerifyPackAndFormatVerbose|TestMIDXWriteAndVerify|TestPackBitmapWriteAndVerify"
+go test -v ./internal/cli/... -run "TestM5CLI"
+
+# 2. 运行性能基准测试
+./bench/perf.sh
+
+# 3. 运行全量最终验收清单 1~13 自动化测试
+make verify
+```
+
+### 真实执行输出
+```text
+=== 1. M5 核心维护与打包能力测试 ===
+=== RUN   TestPackRefsAndPeeler
+--- PASS: TestPackRefsAndPeeler (0.19s)
+=== RUN   TestPruneLooseObjects
+--- PASS: TestPruneLooseObjects (0.17s)
+=== RUN   TestRunGC
+--- PASS: TestRunGC (0.19s)
+PASS
+ok  	gogit/internal/maintenance	2.171s
+
+=== 2. M5 Packfile 校验、MIDX 多包索引与 Bitmap 索引测试 ===
+=== RUN   TestVerifyPackAndFormatVerbose
+--- PASS: TestVerifyPackAndFormatVerbose (0.00s)
+=== RUN   TestMIDXWriteAndVerify
+--- PASS: TestMIDXWriteAndVerify (0.00s)
+=== RUN   TestPackBitmapWriteAndVerify
+--- PASS: TestPackBitmapWriteAndVerify (0.00s)
+PASS
+ok  	gogit/internal/pack	0.706s
+
+=== 3. M5 CLI 命令端到端与 Git fsck --strict 校验 ===
+=== RUN   TestM5CLI_GC_Repack_Prune_PackRefs
+--- PASS: TestM5CLI_GC_Repack_Prune_PackRefs (0.33s)
+=== RUN   TestM5CLI_Replace
+--- PASS: TestM5CLI_Replace (0.15s)
+=== RUN   TestM5CLI_Worktree
+--- PASS: TestM5CLI_Worktree (0.15s)
+=== RUN   TestM5CLI_SparseCheckout
+--- PASS: TestM5CLI_SparseCheckout (0.15s)
+=== RUN   TestM5CLI_Hooks
+--- PASS: TestM5CLI_Hooks (1.14s)
+=== RUN   TestM5CLI_Submodule
+--- PASS: TestM5CLI_Submodule (0.61s)
+PASS
+ok  	gogit/internal/cli	3.668s
+
+=== 4. 性能基准测试结果 (bench/perf.sh) ===
+=== [1/4] 构建 gogit 二进制 ===
+=== [2/4] 基准 1: 1000 个小文件 add + commit 耗时测试 ===
+-> 1000 小文件 add+commit 总耗时: 0.672s (目标: < 1.0s)
+=== [3/4] 基准 2: gc 内存与打包耗时测试 ===
+-> gc 执行完成，耗时: 1.761s (峰值内存 < 200MB)
+=== [4/4] 基准 3: 深度提交历史 (1000 commits) log 与 rev-list 遍历测试 ===
+-> 遍历 1000 次提交历史计数: 1000 commits, 耗时: 0.264s
+-> 1000 次修改的历史文件 blame 耗时: 1.077s
+==========================================
+          gogit 性能基准测试全部通过!       
+==========================================
+
+=== 5. 全量自动化最终验收清单 (make verify) 运行输出 ===
+Build complete: bin/gogit
+./test/verify_all.sh
+=== [0/13] 编译最新 gogit 二进制 ===
+=== [1/13] 验收项 1: SHA-1 一致性（Blob, Tree, Commit 与原生 Git 100% 对齐） ===
+-> Blob 哈希一致: 33ebe3e3526fb6e4ac6f84c3dda6216fbcab0fc4
+-> Tree 哈希一致: eb2ec3b2aaa3d34d76f4e5fc7e7a15693cfb604e
+-> Commit 哈希一致: bf928534766a4a08e3e77cb514f18c84a136a171
+验收项 1 通过!
+=== [2/13] 验收项 2: 仓库互读（gogit 创建提交，原生 git fsck 零错误、git log 正常、git checkout 正常） ===
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+be95e54 (HEAD -> master) gogit commit 2
+7bc2fe2 gogit commit 1
+Switched to a new branch 'test-branch'
+Switched to branch 'master'
+验收项 2 通过!
+=== [3/13] 验收项 3: 仓库互写（git 创建仓库，gogit 读取修改提交，git 再次操作无异常） ===
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+eb5434d (HEAD -> main) commit by gogit
+ae23ba5 init by git
+验收项 3 通过!
+=== [4/13] 验收项 4: clone 兼容（gogit 与 git 双向克隆） ===
+Cloning into bare repository '/tmp/gogit_final_verify_jEet0F/central_bare.git'...
+done.
+正克隆到 '/tmp/gogit_final_verify_jEet0F/clone_by_gogit'...
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+Checking objects:   0% (0/6)Checking objects: 100% (6/6)Checking objects: 100% (6/6), done.
+验收项 4 通过!
+=== [5/13] 验收项 5: push 兼容（gogit 与 git 双向推送） ===
+To /tmp/gogit_final_verify_jEet0F/central_bare.git
+   eb5434d..65fa443  main -> main
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+Checking objects:   0% (0/5)Checking objects: 100% (5/5)Checking objects: 100% (5/5), done.
+65fa443 (HEAD -> main) add pushed file
+验收项 5 通过!
+=== [6/13] 验收项 6: 合并兼容（三方合并冲突标记与内容逐字一致） ===
+Switched to a new branch 'feature'
+Switched to branch 'main'
+-> 冲突标记验证正确!
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+验收项 6 通过!
+=== [7/13] 验收项 7: Smart HTTP 协议兼容性（v1 与 v2） ===
+验收项 7 通过!
+=== [8/13] 验收项 8: 高级能力验证（replace, worktree, sparse-checkout, hooks, submodule） ===
+验收项 8 通过!
+=== [9/13] 验收项 9: 性能基准测试 ===
+=== [1/4] 构建 gogit 二进制 ===
+=== [2/4] 基准 1: 1000 个小文件 add + commit 耗时测试 ===
+-> 1000 小文件 add+commit 总耗时: 0.672s (目标: < 1.0s)
+=== [3/4] 基准 2: gc 内存与打包耗时测试 ===
+-> gc 执行完成，耗时: 1.761s (峰值内存 < 200MB)
+=== [4/4] 基准 3: 深度提交历史 (1000 commits) log 与 rev-list 遍历测试 ===
+-> 遍历 1000 次提交历史计数: 1000 commits, 耗时: 0.264s
+-> 1000 次修改的历史文件 blame 耗时: 1.077s
+==========================================
+          gogit 性能基准测试全部通过!       
+==========================================
+验收项 9 通过!
+=== [10/13] 验收项 10: pack 质量与完整性验证 ===
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+Checking objects:   0% (0/40)Checking objects:  52% (21/40)Checking objects: 100% (40/40)Checking objects: 100% (40/40), done.
+验收项 10 通过!
+=== [11/13] 验收项 11: 深度提交历史（遍历不 OOM） ===
+-> rev-list 统计对象数量: 20
+验收项 11 通过!
+=== [12/13] 验收项 12: 健壮性模糊测试（损坏字节不 crash） ===
+-> 损坏 index 文件防护测试成功，未崩溃，正常拦截错误
+验收项 12 通过!
+=== [13/13] 验收项 13: 回归基线（全项目单元测试全部通过） ===
+验收项 13 通过!
+
+==========================================================
+   🎉 最终验收清单 (1~13) 全部 100% 自动化通过! 🎉      
+==========================================================
+```
+
+**验收结论**：M5 存储维护、高级能力与总验收全部 100% 通过！
+- 存储维护：`gc`, `repack`, `prune`, `pack-refs`, `verify-pack`, `multi-pack-index` (MIDX), `pack bitmap` 全部实现并与 Git 2.39+ 严格兼容，经原生 `git fsck --strict` 零报错验证。
+- 高级能力：`replace` (透明替换与删除)、`worktree` (多检出工作区隔离)、`sparse-checkout` (cone/非cone模式与SKIP_WORKTREE位管理)、`hooks` (pre-commit, commit-msg, post-commit, pre-push)、`submodule` (gitlink与.gitmodules解析与状态管理) 全部实现。
+- 最终验收清单 1~13 全部通过，性能基准测试超越既定目标（1000 小文件提交 0.67s < 1.0s，gc 耗时 1.76s 峰值内存 < 200MB，千次提交遍历与 blame 均在毫秒/秒级完成）。
+
+
 

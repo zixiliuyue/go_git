@@ -2,11 +2,13 @@ package refs
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"gogit/internal/object"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -265,6 +267,33 @@ func (m *Manager) ListRefs(prefix string) (map[string]object.Hash, error) {
 	return result, nil
 }
 
+// ListLooseRefs 遍历列出所有散装引用（例如 refs/heads/..., refs/tags/...）。
+func (m *Manager) ListLooseRefs() (map[string]object.Hash, error) {
+	result := make(map[string]object.Hash)
+	refsDir := filepath.Join(m.gitDir, "refs")
+	if _, err := os.Stat(refsDir); err != nil {
+		return result, nil
+	}
+	err := filepath.Walk(refsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(m.gitDir, path)
+		if err != nil {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err == nil {
+			trimmed := strings.TrimSpace(string(data))
+			if h, err := object.NewHashFromHex(trimmed); err == nil {
+				result[rel] = h
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
 // readPackedRefs 读取 .git/packed-refs 文件
 func (m *Manager) readPackedRefs() (map[string]*Ref, error) {
 	packedPath := filepath.Join(m.gitDir, "packed-refs")
@@ -365,4 +394,81 @@ func (m *Manager) AppendReflog(refName string, oldHash, newHash object.Hash, com
 	line := fmt.Sprintf("%s %s %s\t%s\n", oldHash.String(), newHash.String(), sigStr, message)
 	_, err = f.WriteString(line)
 	return err
+}
+
+// PackRefs 将散装引用打包写入 .git/packed-refs。
+func (m *Manager) PackRefs(all bool, prune bool) error {
+	return m.PackRefsWithPeeler(all, prune, nil)
+}
+
+// PackRefsWithPeeler 打包引用，并通过可选的 peeler 函数为附注标签提取剥离后的提交哈希。
+func (m *Manager) PackRefsWithPeeler(all bool, prune bool, peeler func(object.Hash) (object.Hash, bool)) error {
+	// 1. 读取现有的 packed-refs 字典
+	existing, _ := m.readPackedRefs()
+	if existing == nil {
+		existing = make(map[string]*Ref)
+	}
+
+	// 2. 遍历散装引用
+	looseRefs, err := m.ListLooseRefs()
+	if err != nil {
+		return err
+	}
+
+	var toPrune []string
+
+	for name, h := range looseRefs {
+		// 跳过 HEAD 或非引用文件
+		if name == "HEAD" || !strings.HasPrefix(name, "refs/") {
+			continue
+		}
+		// 如果不是 all，只打包 refs/tags
+		if !all && !strings.HasPrefix(name, "refs/tags/") {
+			continue
+		}
+
+		ref := &Ref{Name: name, Hash: h}
+		if peeler != nil {
+			if peeled, ok := peeler(h); ok {
+				ref.Peeled = peeled
+				ref.HasPeeled = true
+			}
+		}
+		existing[name] = ref
+		toPrune = append(toPrune, name)
+	}
+
+	// 3. 按照 Git 规范，对所有引用进行字典序排序
+	var names []string
+	for name := range existing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// 4. 构建 packed-refs 内容
+	var buf bytes.Buffer
+	buf.WriteString("# pack-refs with: peeled fully-peeled sorted\n")
+	for _, name := range names {
+		r := existing[name]
+		buf.WriteString(fmt.Sprintf("%s %s\n", r.Hash.String(), name))
+		if r.HasPeeled {
+			buf.WriteString(fmt.Sprintf("^%s\n", r.Peeled.String()))
+		}
+	}
+
+	// 5. 原子写入 .git/packed-refs
+	packedPath := filepath.Join(m.gitDir, "packed-refs")
+	if err := atomicWriteFile(packedPath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("写入 packed-refs 失败: %w", err)
+	}
+
+	// 6. 若开启 prune，删除已成功打包的散装引用文件
+	if prune {
+		for _, name := range toPrune {
+			p := filepath.Join(m.gitDir, name)
+			_ = os.Remove(p)
+		}
+	}
+
+	return nil
 }

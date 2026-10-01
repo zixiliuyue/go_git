@@ -5,6 +5,7 @@ import (
 	"gogit/internal/object"
 	"gogit/internal/repo"
 	"gogit/internal/rev"
+	"io"
 	"strings"
 )
 
@@ -47,6 +48,16 @@ func cmdCommitTree(ctx *Context) int {
 	treeHash, err := rev.ParseRevision(r, treeExpr)
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr, "fatal: 无法解析 Tree: %s\n", treeExpr)
+		return ExitFatal
+	}
+
+	if message == "" && ctx.Stdin != nil {
+		data, _ := io.ReadAll(ctx.Stdin)
+		message = string(data)
+	}
+
+	if message == "" {
+		fmt.Fprintln(ctx.Stderr, "fatal: 必须提供提交说明 (-m 或 stdin)")
 		return ExitFatal
 	}
 

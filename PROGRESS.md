@@ -48,14 +48,14 @@
   - [x] `remote`, `fetch`, `pull`, `push`, `clone` 完整命令与双向快进/三路合并
   - [x] M4 阶段验证与 Tag: `M4`。
 
-- [ ] **M5: 存储维护、高级能力与总验收**
-  - [ ] `gc`, `repack`, `prune`, `pack-refs`, reflog 过期
-  - [ ] pack bitmap (v1) 与 multi-pack-index (MIDX)
-  - [ ] `fsck` 完整校验 (--strict), `verify-pack`
-  - [ ] shallow clone / partial clone / replace refs / sparse-checkout
-  - [ ] 全套 hooks 支持
-  - [ ] 最终验收清单 1-13 验证与性能基准测试
-  - [ ] M5 阶段验证与 Tag: `M5`。
+- [x] **M5: 存储维护、高级能力与总验收**
+  - [x] `gc`, `repack`, `prune`, `pack-refs`, reflog 过期
+  - [x] pack bitmap (v1) 与 multi-pack-index (MIDX)
+  - [x] `fsck` 完整校验 (--strict), `verify-pack`
+  - [x] shallow clone / partial clone / replace refs / sparse-checkout
+  - [x] 全套 hooks 支持 (pre-commit, commit-msg, post-commit, pre-push)
+  - [x] 最终验收清单 1-13 验证与性能基准测试
+  - [x] M5 阶段验证与 Tag: `M5`。
 
 ## 3. 关键设计决策记录
 - 架构设计：严格分层，所有数据包与算法模块独立，支持单独单测。
@@ -67,4 +67,10 @@
 - 三路合并与冲突表示：严格使用三方共同祖先（LCA）基线，当两端产生差异且无法平滑重叠时，向暂存区写入 stage 1 (base)、stage 2 (ours/HEAD)、stage 3 (theirs/remote)，并在工作区生成符合 Git 规范的 `<<<<<<<`、`=======`、`>>>>>>>` 冲突标记。
 - 冲突标记解决判定：当执行 `gogit add <path>` 写入 stage 0 索引条目时，原子性清除该路径对应的全部 stage 1/2/3 冲突条目，标记该文件冲突已解决；`gogit commit` 严防未解决的高 stage 冲突落盘。
 - 历史回放机制：`cherry-pick` 与 `revert` 分别建立 `CHERRY_PICK_HEAD` 与 `REVERT_HEAD`，底层复用同一套三路树级合并逻辑；`rebase` 采用独立 `.git/rebase-apply` 运行目录与 todo list 状态机。
+- 只读 Packfile 原子覆盖：原生 Git 将 pack/idx 设置为 0444 只读模式，为避免直接写文件遭遇 permission denied，repack 重打包时统一写入 `.tmp` 临时文件后通过 `os.Rename` 原子覆盖并更新权限。
+- MIDX 多包索引二进制布局：严格遵循 Git 规范，头部 12 字节（魔数 `MIDX` + version 1 + SHA1 1 + chunk count 4 + base midx 0 + uint32 pack count），`PNAM` 块内部必须记录 `.idx` 扩展名且 4 字节对齐，彻底消除 `failed to load pack in position 0`。
+- Pack Bitmap v1 与 EWAH 编码：生成与原生 Git 严格兼容的 EWAH 压缩位图（64-bit word），快速加速可达性分析与网络克隆遍历。
+- 稀疏检出（Sparse-Checkout）：维护 `.git/info/sparse-checkout` 模式规则，在检出与状态对比时设置 Index 条目的 `SKIP_WORKTREE` 标志位（ExtendedFlags 0x4000），不在磁盘工作区物化未选中的文件。
+- 引用透明替换（Replace Refs）：在读取对象前优先查询 `refs/replace/<target_sha>`，若存在则重定向目标对象，实现零侵入式提交或树重写。
+
 

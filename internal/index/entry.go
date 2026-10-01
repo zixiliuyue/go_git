@@ -35,6 +35,21 @@ func (e *IndexEntry) SetStage(stage int) {
 	e.Flags = (e.Flags & ^uint16(0x3000)) | (uint16(stage&0x03) << 12)
 }
 
+// IsSkipWorktree 返回当前条目是否被标记为 skip-worktree（用于稀疏检出）
+func (e *IndexEntry) IsSkipWorktree() bool {
+	return (e.ExtendedFlags & 0x4000) != 0
+}
+
+// SetSkipWorktree 设置或清除 skip-worktree 标志位
+func (e *IndexEntry) SetSkipWorktree(skip bool) {
+	if skip {
+		e.Flags |= 0x4000
+		e.ExtendedFlags |= 0x4000
+	} else {
+		e.ExtendedFlags &^= 0x4000
+	}
+}
+
 // EntryFromOSFileInfo 从操作系统文件状态构建 IndexEntry 元数据。
 // 用于实现 stat 缓存比对与暂存更新。
 func EntryFromOSFileInfo(path string, fi os.FileInfo, oid object.Hash) *IndexEntry {
