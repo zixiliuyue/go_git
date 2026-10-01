@@ -3,7 +3,7 @@
 ## 1. 总体目标与状态
 - 目标：从零使用 Go 实现与真实 Git 2.39+ 在数据格式、CLI 语义、网络协议、性能量级四方面完全兼容的版本控制系统 `gogit`。
 - 依赖：纯 Go 标准库实现，不依赖外部 Git 库（仅测试中用原生 git 作为 oracle 对比）。
-- 当前阶段：**M3 - 合并与历史操作** (M1、M2 已圆满验收通过并打 tag)。
+- 当前阶段：**M4 - 传输与克隆（v1+v2）** (M1、M2、M3 已圆满验收通过并打 tag)。
 
 ## 2. 里程碑任务分解与状态 (TODO 清单)
 
@@ -30,15 +30,15 @@
   - [x] 索引 v3/v4 前缀压缩解析/序列化与 split index link 扩展
   - [x] M2 阶段验证与 Tag: `M2`。
 
-- [ ] **M3: 合并与历史操作**
-  - [ ] `internal/merge`: 三路合并算法、递归 LCA (merge-base)、冲突标记逐字一致
-  - [ ] `merge` 命令 (fast-forward, 真实三路合并)
-  - [ ] `rebase` 命令 (基础, `--onto`, `-i` 交互式)
-  - [ ] `cherry-pick`, `revert`
-  - [ ] `stash` 全套 (push/pop/apply/list/drop/show/branch)
-  - [ ] `tag` (lightweight, annotated `-a`, 签名支持)
-  - [ ] `describe`, `blame` (行范围、移动检测), `bisect` (二分搜索), `notes`, `rerere`
-  - [ ] M3 阶段验证与 Tag: `M3`。
+- [x] **M3: 合并与历史操作**
+  - [x] `internal/merge`: 三路合并算法、递归 LCA (merge-base)、冲突标记逐字一致
+  - [x] `merge` 命令 (fast-forward, 真实三路合并，MERGE_HEAD / MERGE_MSG / MERGE_MODE 支持)
+  - [x] `rebase` 命令 (基础, `--onto`, `-i` 交互式 todo 状态机)
+  - [x] `cherry-pick`, `revert` (CHERRY_PICK_HEAD / REVERT_HEAD 维护)
+  - [x] `stash` 全套 (push/pop/apply/list/drop/show)
+  - [x] `tag` (lightweight, annotated `-a` 带 tagger 签名与对象剥离)
+  - [x] `describe`, `blame` (Myers 行级归属与历史穿透), `bisect` (二分搜索与自动化 run), `notes`, `rerere` (预存镜像与自动回填)
+  - [x] M3 阶段验证与 Tag: `M3`。
 
 - [ ] **M4: 传输与克隆（v1+v2）**
   - [ ] `internal/pack`: pack v2 与 idx v2 解析与生成、OFS_DELTA / REF_DELTA 增量编解码、thin pack 修复
@@ -64,3 +64,7 @@
 - 差分算法：统一使用 Myers O(ND) 差分算法，Hunk 头部格式严格对齐 Git（单行省略 `,1`，空文件起始行置 0）。
 - 忽略规则优先级：已跟踪文件永远不受 `.gitignore` 影响；未跟踪文件严格按 `.gitignore` 过滤，并在 porcelain 输出中最后按路径排序输出。
 - 索引兼容：Index v4 采用 7-bit varint 路径前缀压缩，序列化后与 Git 2.39+ 双向兼容。
+- 三路合并与冲突表示：严格使用三方共同祖先（LCA）基线，当两端产生差异且无法平滑重叠时，向暂存区写入 stage 1 (base)、stage 2 (ours/HEAD)、stage 3 (theirs/remote)，并在工作区生成符合 Git 规范的 `<<<<<<<`、`=======`、`>>>>>>>` 冲突标记。
+- 冲突标记解决判定：当执行 `gogit add <path>` 写入 stage 0 索引条目时，原子性清除该路径对应的全部 stage 1/2/3 冲突条目，标记该文件冲突已解决；`gogit commit` 严防未解决的高 stage 冲突落盘。
+- 历史回放机制：`cherry-pick` 与 `revert` 分别建立 `CHERRY_PICK_HEAD` 与 `REVERT_HEAD`，底层复用同一套三路树级合并逻辑；`rebase` 采用独立 `.git/rebase-apply` 运行目录与 todo list 状态机。
+

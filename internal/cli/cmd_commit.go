@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"gogit/internal/object"
 	"gogit/internal/repo"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,6 +23,8 @@ func cmdCommit(ctx *Context) int {
 		if arg == "-m" && i+1 < len(ctx.Args) {
 			message = ctx.Args[i+1]
 			i++
+		} else if strings.HasPrefix(arg, "-m") {
+			message = strings.TrimPrefix(arg, "-m")
 		} else if arg == "--amend" {
 			amend = true
 		} else if strings.HasPrefix(arg, "--author=") {
@@ -28,14 +32,24 @@ func cmdCommit(ctx *Context) int {
 		}
 	}
 
-	if message == "" {
-		fmt.Fprintln(ctx.Stderr, "fatal: 暂不支持交互式编辑器输入提交信息，请使用 -m <message>")
-		return ExitFatal
-	}
-
 	r, err := repo.FindRepository(".")
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr, "fatal: %v\n", err)
+		return ExitFatal
+	}
+
+	// 检查是否有未解决的合并状态与 MERGE_MSG
+	mergeMsgPath := filepath.Join(r.GitDir, "MERGE_MSG")
+	mergeHeadPath := filepath.Join(r.GitDir, "MERGE_HEAD")
+
+	if message == "" {
+		if msgBytes, err := os.ReadFile(mergeMsgPath); err == nil && len(msgBytes) > 0 {
+			message = strings.TrimSpace(string(msgBytes))
+		}
+	}
+
+	if message == "" {
+		fmt.Fprintln(ctx.Stderr, "fatal: 请使用 -m <message> 指定提交信息")
 		return ExitFatal
 	}
 
@@ -47,6 +61,14 @@ func cmdCommit(ctx *Context) int {
 	if len(idx.Entries) == 0 {
 		fmt.Fprintln(ctx.Stderr, "nothing to commit (create/copy files and use \"gogit add\" to track)")
 		return ExitGeneral
+	}
+
+	// 检查索引中是否存在冲突阶段（stage > 0）
+	for _, e := range idx.Entries {
+		if e.Stage() > 0 {
+			fmt.Fprintf(ctx.Stderr, "error: Committing is not possible because you have unmerged files.\nhint: Fix them up in the work tree, and then use 'gogit add/rm <file>'\nhint: as appropriate to mark resolution and make a commit.\nfatal: Exiting because of an unresolved conflict.\n")
+			return ExitError
+		}
 	}
 
 	// 1. 从当前 index 写入 Tree 对象
@@ -76,6 +98,16 @@ func cmdCommit(ctx *Context) int {
 			}
 		} else {
 			parents = append(parents, currentHeadHash)
+		}
+	}
+
+	// 检查是否有合并中的第二父提交 (MERGE_HEAD)
+	if mergeHeadBytes, err := os.ReadFile(mergeHeadPath); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(mergeHeadBytes)), "\n")
+		for _, l := range lines {
+			if h, err := object.NewHashFromHex(strings.TrimSpace(l)); err == nil {
+				parents = append(parents, h)
+			}
 		}
 	}
 
@@ -111,6 +143,8 @@ func cmdCommit(ctx *Context) int {
 	logAction := "commit"
 	if isRootCommit {
 		logAction = "commit (initial)"
+	} else if len(parents) > 1 {
+		logAction = "commit (merge)"
 	} else if amend {
 		logAction = "commit (amend)"
 	}
@@ -127,6 +161,11 @@ func cmdCommit(ctx *Context) int {
 			return ExitFatal
 		}
 	}
+
+	// 清理 MERGE 状态文件
+	_ = os.Remove(mergeHeadPath)
+	_ = os.Remove(mergeMsgPath)
+	_ = os.Remove(filepath.Join(r.GitDir, "MERGE_MODE"))
 
 	// 6. 输出简短信息，格式与 git commit 对齐
 	branchName := "detached"

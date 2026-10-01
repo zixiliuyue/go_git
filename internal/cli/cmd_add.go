@@ -51,8 +51,10 @@ func cmdAdd(ctx *Context) int {
 	_ = ignorer.LoadIgnoreFile(filepath.Join(r.GitDir, "info", "exclude"), "")
 	if globalExclude := r.Config.Get("core", "excludesfile"); globalExclude != "" {
 		_ = ignorer.LoadIgnoreFile(globalExclude, "")
+	} else if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		_ = ignorer.LoadIgnoreFile(filepath.Join(xdg, "git", "ignore"), "")
 	} else if home, err := os.UserHomeDir(); err == nil {
-		_ = ignorer.LoadIgnoreFile(filepath.Join(home, ".gitignore_global"), "")
+		_ = ignorer.LoadIgnoreFile(filepath.Join(home, ".config", "git", "ignore"), "")
 	}
 
 	for _, spec := range specs {
@@ -111,7 +113,8 @@ func cmdAdd(ctx *Context) int {
 			relPath, _ := filepath.Rel(r.WorkTree, targetPath)
 			relPath = filepath.ToSlash(relPath)
 			if !force && ignorer.Match(relPath, false) {
-				continue
+				fmt.Fprintf(ctx.Stderr, "The following paths are ignored by one of your .gitignore files:\n%s\nUse -f if you really want to add them.\n", relPath)
+				return ExitGeneral
 			}
 			if err := stageFile(r, idx, targetPath, fi); err != nil {
 				fmt.Fprintf(ctx.Stderr, "fatal: 添加文件 %s 失败: %v\n", spec, err)

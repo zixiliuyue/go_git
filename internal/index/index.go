@@ -243,7 +243,14 @@ func (idx *Index) FindEntry(path string) (*IndexEntry, bool) {
 }
 
 // AddOrReplaceEntry 添加新条目或替换同路径同 stage 的旧条目，保持排序。
+// 当添加 stage 0 条目时，会清除该路径下所有的 stage 1/2/3 冲突条目，标记冲突已解决。
 func (idx *Index) AddOrReplaceEntry(newEntry *IndexEntry) {
+	if newEntry.Stage() == 0 {
+		idx.RemoveEntry(newEntry.Path)
+		idx.Entries = append(idx.Entries, newEntry)
+		idx.Sort()
+		return
+	}
 	for i, existing := range idx.Entries {
 		if existing.Path == newEntry.Path && existing.Stage() == newEntry.Stage() {
 			idx.Entries[i] = newEntry

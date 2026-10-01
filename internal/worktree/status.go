@@ -41,8 +41,10 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 	// 加载用户全局 excludesfile
 	if globalExclude := r.Config.Get("core", "excludesfile"); globalExclude != "" {
 		_ = ignorer.LoadIgnoreFile(globalExclude, "")
+	} else if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		_ = ignorer.LoadIgnoreFile(filepath.Join(xdg, "git", "ignore"), "")
 	} else if home, err := os.UserHomeDir(); err == nil {
-		_ = ignorer.LoadIgnoreFile(filepath.Join(home, ".gitignore_global"), "")
+		_ = ignorer.LoadIgnoreFile(filepath.Join(home, ".config", "git", "ignore"), "")
 	}
 
 	// 2. 读取 HEAD

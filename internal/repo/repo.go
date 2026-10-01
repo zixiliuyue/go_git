@@ -199,6 +199,21 @@ func (r *Repository) WriteBlob(data []byte) (object.Hash, error) {
 	return object.WriteLooseObjectToDir(r.ObjectsDir, object.TypeBlob, data)
 }
 
+// WriteCommit 便捷方法：写入 commit 对象。
+func (r *Repository) WriteCommit(c *object.Commit) (object.Hash, error) {
+	return r.WriteObject(c)
+}
+
+// WriteTree 便捷方法：写入 tree 对象。
+func (r *Repository) WriteTree(t *object.Tree) (object.Hash, error) {
+	return r.WriteObject(t)
+}
+
+// WriteTreeFromIndex 便捷方法：从 index 递归构建并写入 tree 对象。
+func (r *Repository) WriteTreeFromIndex(idx *index.Index) (object.Hash, error) {
+	return idx.WriteTree(r.ObjectsDir)
+}
+
 // ReadCommit 读取并解析 commit 对象。
 func (r *Repository) ReadCommit(h object.Hash) (*object.Commit, error) {
 	raw, err := r.ReadObject(h)
