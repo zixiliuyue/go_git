@@ -1,0 +1,18 @@
+# 二进制与构建产物
+bin/
+/gogit
+*.exe
+*.test
+*.out
+
+# 临时测试目录
+/tmp/
+test_scratch/
+scratch/
+
+# IDE 与系统文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
