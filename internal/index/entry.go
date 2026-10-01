@@ -21,6 +21,7 @@ type IndexEntry struct {
 	Size          uint32
 	OID           object.Hash
 	Flags         uint16
+	ExtendedFlags uint16
 	Path          string
 }
 

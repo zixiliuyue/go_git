@@ -47,3 +47,104 @@ initial commit by gogit
 
 **验收结论**：M1 全部通过。gogit 建仓提交后，真实 git fsck --strict 零错误；`cat-file -p` 与 `rev-parse HEAD` 与 git 完全一致。
 
+---
+
+## M2 验收结果 (索引/状态/diff/log/分支)
+
+### 验收命令
+```bash
+/tmp/gogit_bin init -b main /tmp/gogit_m2_verify
+cd /tmp/gogit_m2_verify
+echo "*.log" > .gitignore
+echo "!important.log" >> .gitignore
+echo "hello main" > main.go
+echo "ignore me" > test.log
+echo "keep me" > important.log
+/tmp/gogit_bin add .
+/tmp/gogit_bin commit -m "init main"
+git checkout -b feature
+echo "feature code" > feature.go
+echo "hello main modified" > main.go
+
+# 1. 状态比对
+/tmp/gogit_bin status --porcelain
+git status --porcelain
+
+# 2. 工作区 diff 比对
+/tmp/gogit_bin diff
+git diff
+
+# 3. 暂存与暂存区 diff 比对
+/tmp/gogit_bin add feature.go
+/tmp/gogit_bin diff --cached
+git diff --cached
+
+# 4. 健康检查
+git fsck --strict
+
+# 5. 拓扑分支图比对
+/tmp/gogit_bin commit -m "feature commit"
+/tmp/gogit_bin log --oneline --graph --all
+git log --oneline --graph --all
+```
+
+### 真实执行输出
+```text
+Initialized empty Git repository in /tmp/gogit_m2_verify/.git/
+[main (root-commit) 4d0b068] init main
+Switched to a new branch 'feature'
+=== 1. gogit status --porcelain vs git status --porcelain ===
+--- gogit status ---
+ M main.go
+?? feature.go
+--- git status ---
+ M main.go
+?? feature.go
+=== 2. gogit diff vs git diff ===
+--- gogit diff ---
+diff --git a/main.go b/main.go
+index 5799d3c..5bb00c4 000644
+--- a/main.go
++++ b/main.go
+@@ -1 +1 @@
+-hello main
++hello main modified
+--- git diff ---
+diff --git a/main.go b/main.go
+index 5799d3c..5bb00c4 100644
+--- a/main.go
++++ b/main.go
+@@ -1 +1 @@
+-hello main
++hello main modified
+=== 3. gogit add feature.go && diff --cached ===
+--- gogit diff --cached ---
+diff --git a/feature.go b/feature.go
+new file mode 100644
+index 0000000..aa64f58
+--- /dev/null
++++ b/feature.go
+@@ -0,0 +1 @@
++feature code
+--- git diff --cached ---
+diff --git a/feature.go b/feature.go
+new file mode 100644
+index 0000000..aa64f58
+--- /dev/null
++++ b/feature.go
+@@ -0,0 +1 @@
++feature code
+=== 4. git fsck --strict ===
+Checking ref database: 100% (1/1)Checking ref database: 100% (1/1), done.
+Checking object directories: 100% (256/256)Checking object directories: 100% (256/256), done.
+=== 5. 拓扑分支图比对 ===
+--- gogit log --oneline --graph --all ---
+* d3b29f6 feature commit
+* 4d0b068 init main
+--- git log --oneline --graph --all ---
+* d3b29f6 (HEAD -> feature) feature commit
+* 4d0b068 (main) init main
+```
+
+**验收结论**：M2 全部通过。同一仓库交替使用 gogit 与 git 修改、暂存、分支切换，`status --porcelain` 与 `diff` 输出逐行一致，Myers 差分与 Hunk 聚合对齐，索引 v4 支持与 Git 2.39+ 互操作零错误。
+

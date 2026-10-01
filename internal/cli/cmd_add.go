@@ -3,11 +3,10 @@ package cli
 import (
 	"fmt"
 	"gogit/internal/index"
-	"gogit/internal/object"
 	"gogit/internal/repo"
+	"gogit/internal/worktree"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func init() {
@@ -15,8 +14,18 @@ func init() {
 }
 
 func cmdAdd(ctx *Context) int {
-	if len(ctx.Args) == 0 {
-		fmt.Fprintln(ctx.Stderr, "用法: gogit add <pathspec>...")
+	force := false
+	var specs []string
+	for _, arg := range ctx.Args {
+		if arg == "-f" || arg == "--force" {
+			force = true
+		} else {
+			specs = append(specs, arg)
+		}
+	}
+
+	if len(specs) == 0 {
+		fmt.Fprintln(ctx.Stderr, "用法: gogit add [-f] <pathspec>...")
 		return ExitGeneral
 	}
 
@@ -37,7 +46,16 @@ func cmdAdd(ctx *Context) int {
 		return ExitFatal
 	}
 
-	for _, spec := range ctx.Args {
+	ignorer := worktree.NewIgnoreMatcher()
+	_ = ignorer.LoadIgnoreFile(filepath.Join(r.WorkTree, ".gitignore"), "")
+	_ = ignorer.LoadIgnoreFile(filepath.Join(r.GitDir, "info", "exclude"), "")
+	if globalExclude := r.Config.Get("core", "excludesfile"); globalExclude != "" {
+		_ = ignorer.LoadIgnoreFile(globalExclude, "")
+	} else if home, err := os.UserHomeDir(); err == nil {
+		_ = ignorer.LoadIgnoreFile(filepath.Join(home, ".gitignore_global"), "")
+	}
+
+	for _, spec := range specs {
 		if spec == "-A" || spec == "." {
 			spec = "."
 		}
@@ -64,7 +82,22 @@ func cmdAdd(ctx *Context) int {
 				if info.IsDir() && info.Name() == ".git" {
 					return filepath.SkipDir
 				}
+
+				relPath, _ := filepath.Rel(r.WorkTree, path)
+				relPath = filepath.ToSlash(relPath)
+
 				if info.IsDir() {
+					localIgnore := filepath.Join(path, ".gitignore")
+					if _, err := os.Stat(localIgnore); err == nil {
+						_ = ignorer.LoadIgnoreFile(localIgnore, relPath)
+					}
+					if !force && ignorer.Match(relPath, true) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+
+				if !force && ignorer.Match(relPath, false) {
 					return nil
 				}
 
@@ -75,6 +108,11 @@ func cmdAdd(ctx *Context) int {
 				return ExitFatal
 			}
 		} else {
+			relPath, _ := filepath.Rel(r.WorkTree, targetPath)
+			relPath = filepath.ToSlash(relPath)
+			if !force && ignorer.Match(relPath, false) {
+				continue
+			}
 			if err := stageFile(r, idx, targetPath, fi); err != nil {
 				fmt.Fprintf(ctx.Stderr, "fatal: 添加文件 %s 失败: %v\n", spec, err)
 				return ExitFatal
@@ -95,17 +133,15 @@ func stageFile(r *repo.Repository, idx *index.Index, absPath string, fi os.FileI
 	if err != nil {
 		return err
 	}
-	// 规范化路径分隔符为正斜杠 '/'
-	relPath = strings.ReplaceAll(relPath, "\\", "/")
+	relPath = filepath.ToSlash(relPath)
 
 	var data []byte
 	if fi.Mode()&os.ModeSymlink != 0 {
-		// 符号链接内容为目标链接地址
-		target, err := os.Readlink(absPath)
+		linkTarget, err := os.Readlink(absPath)
 		if err != nil {
 			return err
 		}
-		data = []byte(target)
+		data = []byte(linkTarget)
 	} else {
 		data, err = os.ReadFile(absPath)
 		if err != nil {
@@ -113,12 +149,12 @@ func stageFile(r *repo.Repository, idx *index.Index, absPath string, fi os.FileI
 		}
 	}
 
-	blobHash, err := object.WriteLooseObjectToDir(r.ObjectsDir, object.TypeBlob, data)
+	oid, err := r.WriteBlob(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("写入 blob 对象失败: %w", err)
 	}
 
-	entry := index.EntryFromOSFileInfo(relPath, fi, blobHash)
+	entry := index.EntryFromOSFileInfo(relPath, fi, oid)
 	idx.AddOrReplaceEntry(entry)
 	return nil
 }

@@ -81,13 +81,22 @@ func ParseIndex(data []byte) (*Index, error) {
 	}
 
 	cur := data[12:contentLen]
-	for i := uint32(0); i < numEntries; i++ {
-		entry, consumed, err := ParseEntry(cur)
+	if version == 4 {
+		entries, consumed, err := ParseIndexV4(cur, numEntries)
 		if err != nil {
-			return nil, fmt.Errorf("解析第 %d 个条目失败: %w", i, err)
+			return nil, fmt.Errorf("解析 v4 索引条目失败: %w", err)
 		}
-		idx.Entries = append(idx.Entries, entry)
+		idx.Entries = entries
 		cur = cur[consumed:]
+	} else {
+		for i := uint32(0); i < numEntries; i++ {
+			entry, consumed, err := ParseEntry(cur)
+			if err != nil {
+				return nil, fmt.Errorf("解析第 %d 个条目失败: %w", i, err)
+			}
+			idx.Entries = append(idx.Entries, entry)
+			cur = cur[consumed:]
+		}
 	}
 
 	// 解析可选扩展块
@@ -128,8 +137,12 @@ func (idx *Index) Serialize() ([]byte, error) {
 	buf.Write(numBuf[:])
 
 	// 2. 写入条目
-	for _, entry := range idx.Entries {
-		buf.Write(entry.Serialize())
+	if idx.Version == 4 {
+		buf.Write(SerializeIndexV4(idx.Entries))
+	} else {
+		for _, entry := range idx.Entries {
+			buf.Write(entry.Serialize())
+		}
 	}
 
 	// 3. 写入扩展块
@@ -221,6 +234,12 @@ func (idx *Index) Find(path string) *IndexEntry {
 		return idx.Entries[i]
 	}
 	return nil
+}
+
+// FindEntry 查找指定路径的 stage 0 条目，返回指针与存在标识
+func (idx *Index) FindEntry(path string) (*IndexEntry, bool) {
+	e := idx.Find(path)
+	return e, e != nil
 }
 
 // AddOrReplaceEntry 添加新条目或替换同路径同 stage 的旧条目，保持排序。

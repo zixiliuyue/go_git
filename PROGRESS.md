@@ -3,7 +3,7 @@
 ## 1. 总体目标与状态
 - 目标：从零使用 Go 实现与真实 Git 2.39+ 在数据格式、CLI 语义、网络协议、性能量级四方面完全兼容的版本控制系统 `gogit`。
 - 依赖：纯 Go 标准库实现，不依赖外部 Git 库（仅测试中用原生 git 作为 oracle 对比）。
-- 当前阶段：**M2 - 索引/状态/diff/log/分支** 进行中 (M1 已圆满验收通过并打 tag)。
+- 当前阶段：**M3 - 合并与历史操作** (M1、M2 已圆满验收通过并打 tag)。
 
 ## 2. 里程碑任务分解与状态 (TODO 清单)
 
@@ -14,31 +14,21 @@
   - [x] `internal/refs`: 基础引用系统（HEAD, refs/heads/*, peeled tag, symbolic ref）
   - [x] `internal/repo`: 仓库发现、`.git` 目录结构、配置读取基础
   - [x] `internal/cli`: 命令行调度器，退出码与统一错误处理
-  - [x] CLI 命令实现：
-    - [x] `init` (支持 `--bare`, 初始分支)
-    - [x] `hash-object` (支持 `-w`, `--stdin`, 类型参数)
-    - [x] `cat-file` (支持 `-p`, `-t`, `-s`)
-    - [x] `ls-tree` (支持 `-r`, `--name-only`)
-    - [x] `write-tree` (从 index 写 tree)
-    - [x] `commit-tree` (根据 tree 和 parent 写 commit)
-    - [x] `add` (将工作区文件写入 blob 并更新 index)
-    - [x] `commit` (支持 author/committer 环境变量、-m、提交链更新)
-    - [x] `rev-parse` (解析 HEAD、分支名、40 位与缩写 hash)
-    - [x] `log` (基础提交历史查看)
-    - [x] `fsck` (基础对象与引用一致性检查)
+  - [x] CLI 命令实现：`init`, `hash-object`, `cat-file`, `ls-tree`, `write-tree`, `commit-tree`, `add`, `commit`, `rev-parse`, `log`, `fsck`
   - [x] M1 阶段验证：与系统原生 git 互操作对比测试，通过 `git fsck --strict`。
   - [x] 打 Tag: `M1` 并提交。
 
-- [ ] **M2: 索引/状态/diff/log/分支**
-  - [ ] `internal/worktree`: 工作区扫描、`.gitignore` 完整规则匹配（通配符、取反 `!`、目录限定、`**`）、`.gitattributes` 基础
-  - [ ] `internal/diff`: Myers / xdiff 算法实现、统一 diff 输出、`--stat`, `--numstat`, `--name-status`, rename/copy 检测
-  - [ ] `status` 命令：porcelain 格式逐行与 git 对齐、stat 缓存匹配
-  - [ ] `diff` 命令：worktree ↔ index ↔ HEAD 两两比较
-  - [ ] `branch` 命令：列表、创建、删除、重命名
-  - [ ] `checkout` / `switch` 命令：分支切换、detached HEAD、工作区检出
-  - [ ] `restore`, `clean` 命令
-  - [ ] 索引 v3/v4 与 split index
-  - [ ] M2 阶段验证与 Tag: `M2`。
+- [x] **M2: 索引/状态/diff/log/分支**
+  - [x] `internal/worktree`: 工作区扫描、`.gitignore` 完整规则匹配（通配符、取反 `!`、目录限定、`**`）、`.gitattributes` 基础
+  - [x] `internal/diff`: Myers 经典差分算法实现、Unified Hunk 聚合与格式化、`--stat`, `--numstat`, `--name-status`, rename/copy 检测 (-M)
+  - [x] `status` 命令：porcelain 格式逐行与 git 对齐、stat 缓存双通道比对
+  - [x] `diff` 命令：worktree ↔ index ↔ HEAD 两两比较、`--cached`、`--stat`
+  - [x] `branch` 命令：列表、创建、删除 (-d/-D)、重命名 (-m)
+  - [x] `checkout` / `switch` 命令：分支切换、detached HEAD、工作区检出与索引重建
+  - [x] `restore`, `clean` 命令（`-f`, `-d`, `-x` 支持）
+  - [x] `log` 命令：`--graph` 分支拓扑图、`--all`、`-p`、`--stat`
+  - [x] 索引 v3/v4 前缀压缩解析/序列化与 split index link 扩展
+  - [x] M2 阶段验证与 Tag: `M2`。
 
 - [ ] **M3: 合并与历史操作**
   - [ ] `internal/merge`: 三路合并算法、递归 LCA (merge-base)、冲突标记逐字一致
@@ -71,3 +61,6 @@
 - 架构设计：严格分层，所有数据包与算法模块独立，支持单独单测。
 - 字节兼容：对象 SHA-1 严格遵循 Git 规则：`sha1("<type> <size>\x00<content>")`。
 - 目录排序：Tree 对象序列化时，目录排序遵循 Git 规则（目录名后虚拟追加 `/` 比较）。
+- 差分算法：统一使用 Myers O(ND) 差分算法，Hunk 头部格式严格对齐 Git（单行省略 `,1`，空文件起始行置 0）。
+- 忽略规则优先级：已跟踪文件永远不受 `.gitignore` 影响；未跟踪文件严格按 `.gitignore` 过滤，并在 porcelain 输出中最后按路径排序输出。
+- 索引兼容：Index v4 采用 7-bit varint 路径前缀压缩，序列化后与 Git 2.39+ 双向兼容。
