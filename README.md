@@ -1,5 +1,12 @@
 # gogit - 纯 Go 实现的 Git 2.39+ 兼容版本控制系统
 
+<p align="left">
+  <a href="https://github.com/zixiliuyue/go_git/actions/workflows/ci.yml"><img src="https://github.com/zixiliuyue/go_git/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go" alt="Go Version"></a>
+  <a href="ACCEPTANCE.md"><img src="https://img.shields.io/badge/Git%20Compatibility-2.39%2B-F05032?logo=git" alt="Git Compatibility"></a>
+</p>
+
 `gogit` 是一个使用纯 Go 语言（**仅依赖 Go 标准库，无任何第三方 Git 库**）从零构建的高性能、全功能版本控制系统。它实现了 Git 的核心协议、存储引擎与命令行接口，与原生 Git（Git 2.39+）在二进制数据布局、网络协议和行为规范上保持 **100% 双向兼容**，所有生成的仓库均通过原生 `git fsck --strict` 零错误校验。
 
 ---
@@ -160,3 +167,12 @@ echo "Hello Git" > hello.txt
 11. **大历史操作**：数千提交 DAG 遍历低内存、不 OOM。
 12. **健壮性模糊测试**：针对损坏 index / packfile 优雅拦截报错，杜绝 panic 与 crash。
 13. **回归基线**：全套单测与验收脚本可一键无副作用重复运行。
+
+---
+
+## 六、开源协议与社区规范
+
+- **开源协议**：本项目基于 [MIT License](LICENSE) 开源。
+- **贡献指南**：欢迎提交 Issue 与 Pull Request！详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **行为准则**：本项目遵循 Contributor Covenant 社区准则，详见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+- **安全漏洞**：若发现潜在安全隐患，请阅读 [SECURITY.md](SECURITY.md) 进行安全披露。
