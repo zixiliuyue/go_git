@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"gogit/internal/index"
 	"gogit/internal/object"
+	"gogit/internal/pack"
 	"gogit/internal/refs"
 	"os"
 	"os/user"
@@ -178,6 +179,7 @@ func InitRepository(targetDir string, bare bool, initialBranch string) (*Reposit
 }
 
 // ReadObject 根据哈希读取原始 Git 对象。
+// 优先检索 loose 对象，若未命中则检索 objects/pack 目录下的所有 pack 文件。
 func (r *Repository) ReadObject(h object.Hash) (*object.RawObject, error) {
 	hStr := h.String()
 	loosePath := filepath.Join(r.ObjectsDir, hStr[:2], hStr[2:])
@@ -185,7 +187,11 @@ func (r *Repository) ReadObject(h object.Hash) (*object.RawObject, error) {
 		return object.ReadLooseObject(loosePath)
 	}
 
-	// 若未在 loose 中找到，后续里程碑在此挂接 pack 查找
+	// 检索 pack 存储
+	if raw, err := pack.ReadObjectFromPacks(r.ObjectsDir, h); err == nil {
+		return raw, nil
+	}
+
 	return nil, fmt.Errorf("对象未找到: %s", h.String())
 }
 

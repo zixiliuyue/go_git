@@ -45,6 +45,15 @@ func (h Hash) String() string {
 	return hex.EncodeToString(h[:])
 }
 
+// Short 返回 7 字符缩写哈希（Git 默认简写格式）。
+func (h Hash) Short() string {
+	s := h.String()
+	if len(s) >= 7 {
+		return s[:7]
+	}
+	return s
+}
+
 // IsZero 判断当前哈希是否为全零。
 func (h Hash) IsZero() bool {
 	return h == ZeroHash

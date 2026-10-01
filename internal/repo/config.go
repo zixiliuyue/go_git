@@ -41,6 +41,20 @@ func (c *Config) Set(section, key, value string) {
 	c.sections[s][k] = value
 }
 
+// RemoveSection 删除指定的配置段
+func (c *Config) RemoveSection(section string) {
+	delete(c.sections, strings.ToLower(section))
+}
+
+// Sections 返回所有存在的配置段名
+func (c *Config) Sections() []string {
+	var list []string
+	for s := range c.sections {
+		list = append(list, s)
+	}
+	return list
+}
+
 // ParseConfigFile 从指定路径解析 Git INI 格式配置文件，支持递归 include 与 includeIf。
 func ParseConfigFile(path string, gitDir string) (*Config, error) {
 	cfg := NewConfig()

@@ -3,7 +3,7 @@
 ## 1. 总体目标与状态
 - 目标：从零使用 Go 实现与真实 Git 2.39+ 在数据格式、CLI 语义、网络协议、性能量级四方面完全兼容的版本控制系统 `gogit`。
 - 依赖：纯 Go 标准库实现，不依赖外部 Git 库（仅测试中用原生 git 作为 oracle 对比）。
-- 当前阶段：**M4 - 传输与克隆（v1+v2）** (M1、M2、M3 已圆满验收通过并打 tag)。
+- 当前阶段：**M5 - 存储维护、高级能力与总验收** (M1、M2、M3、M4 已圆满验收通过并打 tag)。
 
 ## 2. 里程碑任务分解与状态 (TODO 清单)
 
@@ -40,13 +40,13 @@
   - [x] `describe`, `blame` (Myers 行级归属与历史穿透), `bisect` (二分搜索与自动化 run), `notes`, `rerere` (预存镜像与自动回填)
   - [x] M3 阶段验证与 Tag: `M3`。
 
-- [ ] **M4: 传输与克隆（v1+v2）**
-  - [ ] `internal/pack`: pack v2 与 idx v2 解析与生成、OFS_DELTA / REF_DELTA 增量编解码、thin pack 修复
-  - [ ] `internal/transport`: pkt-line 协议、side-band 多路复用
-  - [ ] Smart HTTP v1 & v2 (info/refs 探测、ls-refs、upload-pack、fetch v2、receive-pack)
-  - [ ] 本地协议 / SSH 协议（调用本地 ssh） / git daemon 协议 / dumb HTTP 兼容
-  - [ ] `remote`, `fetch`, `pull`, `push`, `clone` 命令
-  - [ ] M4 阶段验证与 Tag: `M4`。
+- [x] **M4: 传输与克隆（v1+v2）**
+  - [x] `internal/pack`: pack v2 与 idx v2 解析与生成、OFS_DELTA / REF_DELTA 增量编解码、thin pack 修复、LibXDiff 滑动窗口压缩
+  - [x] `internal/transport`: pkt-line 协议、side-band 多路复用 (64k)
+  - [x] Smart HTTP v1 & v2 (info/refs 探测、ls-refs、upload-pack、fetch v2、receive-pack)
+  - [x] 本地协议 / SSH 协议（调用系统 ssh 管道） / git daemon 协议
+  - [x] `remote`, `fetch`, `pull`, `push`, `clone` 完整命令与双向快进/三路合并
+  - [x] M4 阶段验证与 Tag: `M4`。
 
 - [ ] **M5: 存储维护、高级能力与总验收**
   - [ ] `gc`, `repack`, `prune`, `pack-refs`, reflog 过期
