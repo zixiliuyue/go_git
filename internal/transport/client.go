@@ -3,6 +3,8 @@ package transport
 import (
 	"fmt"
 	"gogit/internal/object"
+	"gogit/internal/telemetry"
+	"gogit/internal/trace2"
 )
 
 // TransportClient 统一的远端传输客户端接口
@@ -79,6 +81,8 @@ func (c *unifiedClient) Discover() ([]RemoteRef, string, error) {
 }
 
 func (c *unifiedClient) Fetch(wants []object.Hash, haves []object.Hash) ([]byte, error) {
+	defer trace2.Region("transport", "fetch")()
+	telemetry.ForSubsystem("transport").Info("协商并拉取 Packfile", "wants_count", len(wants), "haves_count", len(haves))
 	if c.localTr != nil {
 		return c.localTr.FetchPack(wants, haves)
 	}
@@ -103,6 +107,8 @@ func (c *unifiedClient) Fetch(wants []object.Hash, haves []object.Hash) ([]byte,
 }
 
 func (c *unifiedClient) Push(updates []RefUpdate, packData []byte) error {
+	defer trace2.Region("transport", "push")()
+	telemetry.ForSubsystem("transport").Info("推送 Packfile 到远端", "updates_count", len(updates))
 	if c.localTr != nil {
 		return c.localTr.PushPack(updates, packData)
 	}

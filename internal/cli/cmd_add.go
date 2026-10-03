@@ -7,6 +7,7 @@ import (
 	"gogit/internal/worktree"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func init() {
@@ -76,6 +77,9 @@ func cmdAdd(ctx *Context) int {
 		}
 
 		if fi.IsDir() {
+			dirRel, _ := filepath.Rel(r.WorkTree, targetPath)
+			dirRel = filepath.ToSlash(dirRel)
+
 			err = filepath.Walk(targetPath, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
@@ -108,6 +112,26 @@ func cmdAdd(ctx *Context) int {
 			if err != nil {
 				fmt.Fprintf(ctx.Stderr, "fatal: 遍历添加文件失败: %v\n", err)
 				return ExitFatal
+			}
+
+			// 检查已在暂存区但工作区中已被物理删除的文件并同步移除（对齐 Git 2.0+ git add . 行为）
+			var toRemove []string
+			for _, entry := range idx.Entries {
+				match := false
+				if dirRel == "." || dirRel == "" {
+					match = true
+				} else if strings.HasPrefix(entry.Path, dirRel+"/") || entry.Path == dirRel {
+					match = true
+				}
+				if match {
+					fullEntryPath := filepath.Join(r.WorkTree, entry.Path)
+					if _, err := os.Stat(fullEntryPath); os.IsNotExist(err) {
+						toRemove = append(toRemove, entry.Path)
+					}
+				}
+			}
+			for _, p := range toRemove {
+				idx.RemoveEntry(p)
 			}
 		} else {
 			relPath, _ := filepath.Rel(r.WorkTree, targetPath)

@@ -50,6 +50,28 @@ func (e *IndexEntry) SetSkipWorktree(skip bool) {
 	}
 }
 
+// IsSparseDirectory 判断当前条目是否为稀疏目录（Sparse Directory Entry）
+// 稀疏目录以 '/' 结尾且模式为 0040000 目录，代表该目录及其下全部文件在索引中被折叠
+func (e *IndexEntry) IsSparseDirectory() bool {
+	return e.Mode == uint32(object.ModeDirectory) && len(e.Path) > 0 && e.Path[len(e.Path)-1] == '/'
+}
+
+// IsFSMonitorValid 返回当前条目是否经过 FSMonitor 校验为无变更（CE_FSMONITOR_VALID: 0x2000）
+// 若该位为 1，说明监控守护进程确认该文件自上次快照以来从未变更，状态机可直接跳过 lstat 与内容比对
+func (e *IndexEntry) IsFSMonitorValid() bool {
+	return (e.ExtendedFlags & 0x2000) != 0
+}
+
+// SetFSMonitorValid 设置或清除 FSMonitor 有效标志位
+func (e *IndexEntry) SetFSMonitorValid(valid bool) {
+	if valid {
+		e.Flags |= 0x4000 // 必须置位 CE_EXTENDED
+		e.ExtendedFlags |= 0x2000
+	} else {
+		e.ExtendedFlags &^= 0x2000
+	}
+}
+
 // EntryFromOSFileInfo 从操作系统文件状态构建 IndexEntry 元数据。
 // 用于实现 stat 缓存比对与暂存更新。
 func EntryFromOSFileInfo(path string, fi os.FileInfo, oid object.Hash) *IndexEntry {
@@ -134,16 +156,21 @@ func (e *IndexEntry) MatchStat(fi os.FileInfo) bool {
 	return true
 }
 
-// SerializeEntry 按照 Git index v2 规范序列化单个条目：
-// 包含 62 字节定长头 + 路径 + 1-8 字节空字节填充以对齐至 8 字节边界。
+// Serialize 按照 Git index v2/v3 规范序列化单个条目：
+// 包含 62 字节定长头 + (可选 2 字节 extended flags) + 路径 + 1-8 字节空字节填充以对齐至 8 字节边界。
 func (e *IndexEntry) Serialize() []byte {
 	pathBytes := []byte(e.Path)
 	pathLen := len(pathBytes)
 
+	hasExt := (e.Flags&0x4000) != 0 || e.ExtendedFlags != 0
+	headLen := 62
+	if hasExt {
+		headLen = 64
+	}
+
 	// 计算填充字节数使得条目总长度为 8 的倍数
-	// 62 是头部定长字节数
-	padLen := 8 - ((62 + pathLen) % 8)
-	totalLen := 62 + pathLen + padLen
+	padLen := 8 - ((headLen + pathLen) % 8)
+	totalLen := headLen + pathLen + padLen
 
 	buf := make([]byte, totalLen)
 	binary.BigEndian.PutUint32(buf[0:4], e.CtimeSeconds)
@@ -164,15 +191,22 @@ func (e *IndexEntry) Serialize() []byte {
 		nameLenField = 0xFFF
 	}
 	flags := (e.Flags & 0xF000) | uint16(nameLenField)
+	if hasExt {
+		flags |= 0x4000
+	}
 	binary.BigEndian.PutUint16(buf[60:62], flags)
 
-	copy(buf[62:62+pathLen], pathBytes)
+	if hasExt {
+		binary.BigEndian.PutUint16(buf[62:64], e.ExtendedFlags)
+	}
+
+	copy(buf[headLen:headLen+pathLen], pathBytes)
 	// 其余字节 buf 中自动为 0，正好充当 null 结束符与对齐填充
 
 	return buf
 }
 
-// ParseEntry 解析单个 index v2 格式条目，返回解析出的条目与消耗的字节数。
+// ParseEntry 解析单个 index v2/v3 格式条目，返回解析出的条目与消耗的字节数。
 func ParseEntry(data []byte) (*IndexEntry, int, error) {
 	if len(data) < 62 {
 		return nil, 0, os.ErrInvalid
@@ -193,8 +227,16 @@ func ParseEntry(data []byte) (*IndexEntry, int, error) {
 	}
 	copy(e.OID[:], data[40:60])
 
-	// 查找路径结束符 '\0'
 	pathStart := 62
+	if (e.Flags & 0x4000) != 0 {
+		if len(data) < 64 {
+			return nil, 0, os.ErrInvalid
+		}
+		e.ExtendedFlags = binary.BigEndian.Uint16(data[62:64])
+		pathStart = 64
+	}
+
+	// 查找路径结束符 '\0'
 	pathEnd := -1
 	for i := pathStart; i < len(data); i++ {
 		if data[i] == 0 {
@@ -208,8 +250,8 @@ func ParseEntry(data []byte) (*IndexEntry, int, error) {
 
 	e.Path = string(data[pathStart:pathEnd])
 	pathLen := len(e.Path)
-	padLen := 8 - ((62 + pathLen) % 8)
-	totalLen := 62 + pathLen + padLen
+	padLen := 8 - ((pathStart + pathLen) % 8)
+	totalLen := pathStart + pathLen + padLen
 
 	if len(data) < totalLen {
 		return nil, 0, os.ErrInvalid

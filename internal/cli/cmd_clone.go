@@ -24,6 +24,7 @@ func cmdClone(ctx *Context) int {
 
 	isBare := false
 	specifiedBranch := ""
+	bundleURI := ""
 	var positional []string
 
 	for i := 0; i < len(ctx.Args); i++ {
@@ -37,6 +38,13 @@ func cmdClone(ctx *Context) int {
 			}
 		} else if strings.HasPrefix(arg, "--branch=") {
 			specifiedBranch = strings.TrimPrefix(arg, "--branch=")
+		} else if arg == "--bundle-uri" {
+			if i+1 < len(ctx.Args) {
+				bundleURI = ctx.Args[i+1]
+				i++
+			}
+		} else if strings.HasPrefix(arg, "--bundle-uri=") {
+			bundleURI = strings.TrimPrefix(arg, "--bundle-uri=")
 		} else {
 			positional = append(positional, arg)
 		}
@@ -86,6 +94,22 @@ func cmdClone(ctx *Context) int {
 	// 2. 添加 origin 远端
 	if err := transport.AddRemote(r, "origin", rawURL); err != nil {
 		fmt.Fprintf(ctx.Stderr, "warning: 添加远端失败: %v\n", err)
+	}
+
+	// 2.5 若指定了 --bundle-uri，先从 CDN/静态存储下载解包预设数据
+	var haves []object.Hash
+	if bundleURI != "" {
+		fmt.Fprintf(ctx.Stderr, "从 Bundle-URI 下载预设快照: %s...\n", bundleURI)
+		bHeader, err := transport.ApplyBundleURI(r, bundleURI)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "warning: 下载应用 bundle-uri 失败: %v，将降级为常规全量拉取\n", err)
+		} else {
+			for _, ref := range bHeader.References {
+				if r.HasObject(ref.OID) {
+					haves = append(haves, ref.OID)
+				}
+			}
+		}
 	}
 
 	// 3. 连接远端客户端进行引用发现
@@ -176,18 +200,28 @@ func cmdClone(ctx *Context) int {
 		wants = append(wants, defaultCommit)
 	}
 
-	// 6. 拉取 packfile
-	packData, err := client.Fetch(wants, nil)
-	if err != nil {
-		fmt.Fprintf(ctx.Stderr, "fatal: 拉取 pack 数据失败: %v\n", err)
-		return ExitFatal
+	// 6. 检查本地是否已通过 bundle 拥有所有目标对象；若有缺失则向远端进行增量拉取
+	needFetch := false
+	for _, w := range wants {
+		if !r.HasObject(w) {
+			needFetch = true
+			break
+		}
 	}
 
-	// 7. 保存 packfile 与生成 .idx
-	if len(packData) > 0 {
-		if _, err := pack.SavePackAndIndex(r.ObjectsDir, packData); err != nil {
-			fmt.Fprintf(ctx.Stderr, "fatal: 解压索引 pack 失败: %v\n", err)
+	if needFetch || len(haves) == 0 {
+		packData, err := client.Fetch(wants, haves)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "fatal: 拉取 pack 数据失败: %v\n", err)
 			return ExitFatal
+		}
+
+		// 7. 保存 packfile 与生成 .idx
+		if len(packData) > 0 {
+			if _, err := pack.SavePackAndIndex(r.ObjectsDir, packData); err != nil {
+				fmt.Fprintf(ctx.Stderr, "fatal: 解压索引 pack 失败: %v\n", err)
+				return ExitFatal
+			}
 		}
 	}
 

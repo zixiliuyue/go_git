@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,6 +18,18 @@ type HTTPTransport struct {
 	Endpoint   *Endpoint
 	Client     *http.Client
 	AuthHeader string
+	Context    context.Context
+}
+
+func (ht *HTTPTransport) SetContext(ctx context.Context) {
+	ht.Context = ctx
+}
+
+func (ht *HTTPTransport) getContext() context.Context {
+	if ht.Context != nil {
+		return ht.Context
+	}
+	return context.Background()
 }
 
 func NewHTTPTransport(ep *Endpoint) *HTTPTransport {
@@ -37,7 +50,7 @@ func NewHTTPTransport(ep *Endpoint) *HTTPTransport {
 // DiscoverUploadPack 发现远端引用的能力与列表（优先尝试 Git Protocol v2）
 func (ht *HTTPTransport) DiscoverUploadPack() ([]RemoteRef, string, *RemoteCapabilities, error) {
 	infoURL := fmt.Sprintf("%s/info/refs?service=git-upload-pack", strings.TrimSuffix(ht.Endpoint.Original, "/"))
-	req, err := http.NewRequest("GET", infoURL, nil)
+	req, err := http.NewRequestWithContext(ht.getContext(), "GET", infoURL, nil)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -173,7 +186,7 @@ func (ht *HTTPTransport) lsRefsV2() ([]RemoteRef, string, error) {
 	_ = WritePacketString(&body, "symrefs\n")
 	_ = WriteFlush(&body)
 
-	req, err := http.NewRequest("POST", serviceURL, &body)
+	req, err := http.NewRequestWithContext(ht.getContext(), "POST", serviceURL, &body)
 	if err != nil {
 		return nil, "", err
 	}
@@ -271,7 +284,7 @@ func (ht *HTTPTransport) FetchPack(wants []object.Hash, haves []object.Hash, cap
 		_ = WritePacketString(&body, "done\n")
 	}
 
-	req, err := http.NewRequest("POST", serviceURL, &body)
+	req, err := http.NewRequestWithContext(ht.getContext(), "POST", serviceURL, &body)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +376,7 @@ func (ht *HTTPTransport) PushPack(updates []RefUpdate, packData []byte) error {
 		body.Write(packData)
 	}
 
-	req, err := http.NewRequest("POST", serviceURL, &body)
+	req, err := http.NewRequestWithContext(ht.getContext(), "POST", serviceURL, &body)
 	if err != nil {
 		return err
 	}

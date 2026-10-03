@@ -6,6 +6,8 @@ import (
 	"gogit/internal/index"
 	"gogit/internal/object"
 	"gogit/internal/repo"
+	"gogit/internal/telemetry"
+	"gogit/internal/trace2"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,8 +32,35 @@ type StatusResult struct {
 	Items      []*StatusItem
 }
 
-// ComputeStatus 计算当前仓库完整状态（遵循 Git status --porcelain 规范）
+// UntrackedMode 控制未跟踪文件的展示策略
+type UntrackedMode string
+
+const (
+	// UntrackedNo 不展示任何未跟踪文件
+	UntrackedNo UntrackedMode = "no"
+	// UntrackedNormal 默认模式：对完全未跟踪的子目录自动折叠为 dir/
+	UntrackedNormal UntrackedMode = "normal"
+	// UntrackedAll 展开列出所有层级的未跟踪文件
+	UntrackedAll UntrackedMode = "all"
+)
+
+// StatusOptions 状态计算选项
+type StatusOptions struct {
+	Untracked UntrackedMode
+}
+
+// ComputeStatus 计算当前仓库完整状态（遵循 Git status --porcelain 规范，默认折叠未跟踪目录）
 func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
+	return ComputeStatusWithOptions(r, StatusOptions{Untracked: UntrackedNormal})
+}
+
+// ComputeStatusWithOptions 根据给定的 UntrackedMode 等选项计算工作区状态
+func ComputeStatusWithOptions(r *repo.Repository, opts StatusOptions) (*StatusResult, error) {
+	if opts.Untracked == "" {
+		opts.Untracked = UntrackedNormal
+	}
+	defer trace2.Region("status", "compute_status")()
+	telemetry.ForSubsystem("worktree").Debug("开始计算仓库工作区状态", "worktree", r.WorkTree)
 	// 1. 初始化 IgnoreMatcher 并加载各级 ignore 文件
 	ignorer := NewIgnoreMatcher()
 	// 加载仓库根目录 .gitignore
@@ -71,8 +100,11 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 	// 3. 读取暂存区索引
 	idx, err := r.GetIndex()
 	if err != nil {
-		idx = index.NewIndex()
+		return nil, fmt.Errorf("读取暂存区索引失败: %w", err)
 	}
+
+	// 3.1 若配置了 core.fsmonitor，执行事件查询并更新条目有效性
+	fsmonUpdated, _ := ApplyFSMonitorUpdate(r, idx)
 
 	itemMap := make(map[string]*StatusItem)
 	getOrCreate := func(p string) *StatusItem {
@@ -142,6 +174,25 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 					if !hasTracked {
 						return filepath.SkipDir
 					}
+				} else if opts.Untracked == UntrackedNormal {
+					// 默认 normal 模式：若当前目录下完全不存在已跟踪文件，且包含非忽略文件，则折叠为 dir/
+					hasTracked := false
+					prefix := relPath + "/"
+					for p := range indexMap {
+						if strings.HasPrefix(p, prefix) {
+							hasTracked = true
+							break
+						}
+					}
+					if !hasTracked {
+						if dirHasNonIgnored(path, relPath, ignorer) {
+							item := getOrCreate(prefix)
+							item.IsUntracked = true
+							item.Staged = '?'
+							item.Unstaged = '?'
+						}
+						return filepath.SkipDir
+					}
 				}
 				return nil
 			}
@@ -154,12 +205,18 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 
 			worktreePaths[relPath] = true
 			if !inIndex {
-				// 未跟踪文件
-				item := getOrCreate(relPath)
-				item.IsUntracked = true
-				item.Staged = '?'
-				item.Unstaged = '?'
+				if opts.Untracked != UntrackedNo {
+					item := getOrCreate(relPath)
+					item.IsUntracked = true
+					item.Staged = '?'
+					item.Unstaged = '?'
+				}
 			} else {
+				// 若 FSMonitor 已验证该文件自上次快照未发生变更，直接跳过磁盘读取与比对
+				if entry.IsFSMonitorValid() {
+					return nil
+				}
+
 				// 已跟踪文件：比对 stat 缓存与内容哈希
 				if !entry.MatchStat(info) {
 					data, readErr := os.ReadFile(path)
@@ -178,7 +235,10 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 	}
 
 	// 7. 检查工作区被删除的文件 (在 index 中但不在工作区)
-	for p := range indexMap {
+	for p, entry := range indexMap {
+		if entry.IsSkipWorktree() || entry.IsSparseDirectory() {
+			continue
+		}
 		if !worktreePaths[p] {
 			item := getOrCreate(p)
 			item.Unstaged = 'D'
@@ -202,6 +262,10 @@ func ComputeStatus(r *repo.Repository) (*StatusResult, error) {
 		headOID = headRef.Hash
 	}
 
+	if fsmonUpdated {
+		_ = idx.WriteIndex(r.IndexPath)
+	}
+
 	return &StatusResult{
 		BranchName: branchName,
 		IsDetached: isDetached,
@@ -216,7 +280,11 @@ func (s *StatusResult) FormatPorcelain() string {
 	for _, item := range s.Items {
 		if !item.IsUntracked {
 			if item.Staged == 'R' {
-				sb.WriteString(fmt.Sprintf("R  %s -> %s\n", item.OrigPath, item.Path))
+				unstagedChar := item.Unstaged
+				if unstagedChar == 0 {
+					unstagedChar = ' '
+				}
+				sb.WriteString(fmt.Sprintf("R%c %s -> %s\n", unstagedChar, item.OrigPath, item.Path))
 			} else {
 				sb.WriteString(fmt.Sprintf("%c%c %s\n", item.Staged, item.Unstaged, item.Path))
 			}
@@ -228,4 +296,31 @@ func (s *StatusResult) FormatPorcelain() string {
 		}
 	}
 	return sb.String()
+}
+
+// dirHasNonIgnored 递归检测目录下是否包含任何未被忽略的文件，用于未跟踪目录的智能折叠
+func dirHasNonIgnored(absDir, relDir string, ignorer *IgnoreMatcher) bool {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		subRel := filepath.ToSlash(filepath.Join(relDir, e.Name()))
+		if e.IsDir() {
+			if e.Name() == ".git" {
+				continue
+			}
+			if ignorer.Match(subRel, true) {
+				continue
+			}
+			if dirHasNonIgnored(filepath.Join(absDir, e.Name()), subRel, ignorer) {
+				return true
+			}
+		} else {
+			if !ignorer.Match(subRel, false) {
+				return true
+			}
+		}
+	}
+	return false
 }

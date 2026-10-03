@@ -1,8 +1,8 @@
 package repo
 
 import (
-	"errors"
 	"fmt"
+	"gogit/internal/giterr"
 	"gogit/internal/index"
 	"gogit/internal/object"
 	"gogit/internal/pack"
@@ -16,18 +16,20 @@ import (
 )
 
 var (
-	ErrRepositoryNotFound = errors.New("not a git repository (or any of the parent directories)")
+	// ErrRepositoryNotFound 兼容旧代码，别名指向统一领域错误 ErrNotAGitRepository
+	ErrRepositoryNotFound = giterr.ErrNotAGitRepository
 )
 
 // Repository 表示一个 Git 仓库实例（包含工作区、对象库、索引与引用系统）。
 type Repository struct {
-	GitDir     string
-	WorkTree   string
-	IsBare     bool
-	ObjectsDir string
-	IndexPath  string
-	Refs       *refs.Manager
-	Config     *Config
+	GitDir       string
+	WorkTree     string
+	IsBare       bool
+	ObjectsDir   string
+	IndexPath    string
+	Refs         *refs.Manager
+	Config       *Config
+	ObjectFormat object.ObjectFormat // 密码学哈希格式：sha1 或 sha256
 }
 
 // FindRepository 从指定起始目录向上递归查找最近的 Git 仓库（支持环境变量 GIT_DIR/GIT_WORK_TREE）。
@@ -108,19 +110,30 @@ func OpenRepository(gitDir, workTree string) (*Repository, error) {
 		workTree = ""
 	}
 
+	objFormat := object.FormatSHA1
+	if extFormat := cfg.Get("extensions", "objectformat"); extFormat != "" {
+		objFormat = object.ObjectFormat(extFormat)
+	}
+
 	return &Repository{
-		GitDir:     gitDir,
-		WorkTree:   workTree,
-		IsBare:     isBare,
-		ObjectsDir: filepath.Join(gitDir, "objects"),
-		IndexPath:  filepath.Join(gitDir, "index"),
-		Refs:       refs.NewManager(gitDir),
-		Config:     cfg,
+		GitDir:       gitDir,
+		WorkTree:     workTree,
+		IsBare:       isBare,
+		ObjectsDir:   filepath.Join(gitDir, "objects"),
+		IndexPath:    filepath.Join(gitDir, "index"),
+		Refs:         refs.NewManager(gitDir),
+		Config:       cfg,
+		ObjectFormat: objFormat,
 	}, nil
 }
 
-// InitRepository 在目标路径初始化一个全新的 Git 仓库（与 git init 行为完全对齐）。
+// InitRepository 在目标路径初始化一个全新的 Git 仓库（默认使用 SHA-1）。
 func InitRepository(targetDir string, bare bool, initialBranch string) (*Repository, error) {
+	return InitRepositoryWithFormat(targetDir, bare, initialBranch, object.FormatSHA1)
+}
+
+// InitRepositoryWithFormat 支持指定密码学哈希格式（SHA-1 或 SHA-256）初始化仓库（对齐 Git 2.29+ extensions.objectFormat 规范）。
+func InitRepositoryWithFormat(targetDir string, bare bool, initialBranch string, format object.ObjectFormat) (*Repository, error) {
 	if initialBranch == "" {
 		initialBranch = "master"
 	}
@@ -165,7 +178,13 @@ func InitRepository(targetDir string, bare bool, initialBranch string) (*Reposit
 
 	// 写入默认 config 文件
 	cfg := NewConfig()
-	cfg.Set("core", "repositoryformatversion", "0")
+	if format == object.FormatSHA256 {
+		// SHA-256 仓库在 Git 规范中必须启用 repositoryformatversion = 1 与 extensions.objectFormat = sha256
+		cfg.Set("core", "repositoryformatversion", "1")
+		cfg.Set("extensions", "objectformat", "sha256")
+	} else {
+		cfg.Set("core", "repositoryformatversion", "0")
+	}
 	cfg.Set("core", "filemode", "true")
 	if bare {
 		cfg.Set("core", "bare", "true")
@@ -199,7 +218,13 @@ func (r *Repository) ReadObject(h object.Hash) (*object.RawObject, error) {
 		return raw, nil
 	}
 
-	return nil, fmt.Errorf("对象未找到: %s", h.String())
+	return nil, &giterr.ObjectNotFoundError{OID: h}
+}
+
+// HasObject 检查指定哈希的对象在仓库中是否存在（松散对象或打包对象）
+func (r *Repository) HasObject(h object.Hash) bool {
+	_, err := r.ReadObject(h)
+	return err == nil
 }
 
 // WriteObject 将对象序列化并写入仓库的 loose 存储。

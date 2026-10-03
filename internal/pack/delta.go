@@ -24,13 +24,20 @@ func ApplyDelta(base []byte, delta []byte) ([]byte, error) {
 		return nil, fmt.Errorf("base 长度不匹配: 期望 %d, 实际 %d", baseLen, len(base))
 	}
 
-	// 2. 读取目标对象长度
+	// 2. 读取目标对象长度（防解压炸弹：限制单对象解压尺寸上限为 512MB）
 	targetLen, err := readVarint(reader)
 	if err != nil {
 		return nil, fmt.Errorf("读取 target 长度失败: %w", err)
 	}
+	if targetLen > 512*1024*1024 {
+		return nil, fmt.Errorf("delta 目标对象尺寸过大 (%d 字节)，疑似解压炸弹", targetLen)
+	}
 
-	target := make([]byte, 0, targetLen)
+	initCap := targetLen
+	if initCap > 64*1024*1024 {
+		initCap = 64 * 1024 * 1024
+	}
+	target := make([]byte, 0, initCap)
 
 	// 3. 循环解析操作码
 	for reader.Len() > 0 {
@@ -45,32 +52,53 @@ func ApplyDelta(base []byte, delta []byte) ([]byte, error) {
 			var size uint32
 
 			if op&0x01 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				offset |= uint32(b)
 			}
 			if op&0x02 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				offset |= uint32(b) << 8
 			}
 			if op&0x04 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				offset |= uint32(b) << 16
 			}
 			if op&0x08 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				offset |= uint32(b) << 24
 			}
 
 			if op&0x10 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				size |= uint32(b)
 			}
 			if op&0x20 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				size |= uint32(b) << 8
 			}
 			if op&0x40 != 0 {
-				b, _ := reader.ReadByte()
+				b, err := reader.ReadByte()
+				if err != nil {
+					return nil, err
+				}
 				size |= uint32(b) << 16
 			}
 

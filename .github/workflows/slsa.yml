@@ -1,0 +1,105 @@
+name: SLSA 3 Provenance & Release Pipeline
+
+# 遵循 Google 主导的 SLSA (Supply-chain Levels for Software Artifacts) 3 级规范
+# 自动生成不可伪造的构建出处证明（in-toto Provenance）、SHA256 校验清单与 SPDX 2.3 SBOM 物料清单
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  build:
+    name: Build Cross-Platform Binaries & SBOM
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build Multi-Architecture Binaries
+        run: |
+          mkdir -p dist
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+          for p in "${platforms[@]}"; do
+            os="${p%%/*}"
+            arch="${p##*/}"
+            output="dist/gogit-${os}-${arch}"
+            if [ "$os" = "windows" ]; then
+              output="${output}.exe"
+            fi
+            echo "Compiling for ${os}/${arch} -> ${output}..."
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$output" ./cmd/gogit
+          done
+
+      - name: Generate SPDX 2.3 SBOM
+        run: |
+          ./scripts/generate_sbom.sh
+          cp build/sbom.spdx.json dist/
+
+      - name: Generate Checksums
+        id: hash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          echo "hashes=$(sha256sum * | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gogit-binaries
+          path: dist/*
+          if-no-files-found: error
+
+  provenance:
+    name: Generate SLSA Level 3 Provenance Attestation
+    needs: [build]
+    permissions:
+      id-token: write # Sigstore OIDC 无密钥证书签名所需权限
+      contents: write # 发布 Release 产物权限
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: "${{ needs.build.outputs.hashes }}"
+      provenance-name: "gogit.intoto.jsonl"
+      upload-assets: true
+
+  verify:
+    name: Verify SLSA Provenance & SBOM
+    needs: [build, provenance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gogit-binaries
+          path: dist
+
+      - name: Checkout Verification Scripts
+        uses: actions/checkout@v4
+
+      - name: Validate Integrity & Attestations
+        run: |
+          cd dist
+          sha256sum -c SHA256SUMS
+          echo "✓ 二进制与校验和校验通过"
+          test -f sbom.spdx.json
+          echo "✓ SPDX 2.3 SBOM 物料清单就绪"

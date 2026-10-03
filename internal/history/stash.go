@@ -138,8 +138,8 @@ func StashPush(r *repo.Repository, msg string, includeUntracked bool) (object.Ha
 	// 4. 更新 refs/stash（UpdateRef 内部会自动记入 reflog）
 	_ = r.Refs.UpdateRef("refs/stash", stashOID, committer, stashSubject)
 
-	// 5. 将工作区与索引还原为 HEAD
-	_ = worktree.CheckoutSwitch(r, headOID.String(), worktree.CheckoutOptions{})
+	// 5. 将工作区与索引还原为 HEAD（强制覆盖本地修改）
+	_ = worktree.CheckoutSwitch(r, headOID.String(), worktree.CheckoutOptions{Force: true})
 
 	if includeUntracked {
 		for _, item := range st.Items {

@@ -63,6 +63,11 @@ func DiffWorktreeWithIndex(r *repo.Repository, idx *index.Index, opts DiffOption
 	var diffs []*FileDiff
 
 	for _, entry := range idx.Entries {
+		// 跳过稀疏检出隐藏文件与稀疏目录折叠条目
+		if entry.IsSkipWorktree() || entry.IsSparseDirectory() {
+			continue
+		}
+
 		absPath := filepath.Join(r.WorkTree, entry.Path)
 		fi, err := os.Lstat(absPath)
 		if err != nil {
@@ -129,14 +134,20 @@ func DiffIndexWithTree(r *repo.Repository, idx *index.Index, treeHash object.Has
 		opts.ContextLines = 3
 	}
 
-	treeEntries := make(map[string]object.TreeEntry)
-	if !treeHash.IsZero() {
-		flattenTree(r, treeHash, "", treeEntries)
-	}
-
+	// 收集索引中的稀疏目录及其预计算 Tree OID
+	sparseDirs := make(map[string]object.Hash)
 	indexEntries := make(map[string]*index.IndexEntry)
 	for _, e := range idx.Entries {
-		indexEntries[e.Path] = e
+		if e.IsSparseDirectory() {
+			sparseDirs[e.Path] = e.OID
+		} else {
+			indexEntries[e.Path] = e
+		}
+	}
+
+	treeEntries := make(map[string]object.TreeEntry)
+	if !treeHash.IsZero() {
+		flattenTree(r, treeHash, "", treeEntries, sparseDirs)
 	}
 
 	var allPaths []string
@@ -214,7 +225,7 @@ func DiffIndexWithTree(r *repo.Repository, idx *index.Index, treeHash object.Has
 	}
 
 	if opts.DetectRenames {
-		diffs = detectRenames(diffs, opts.RenameThreshold)
+		diffs = detectRenames(r, diffs, opts.RenameThreshold)
 	}
 
 	return filterDiffs(diffs, opts.DiffFilter), nil
@@ -251,7 +262,7 @@ func computeFileDiff(oldPath, newPath string, oldMode, newMode uint32, oldOID, n
 	return fd
 }
 
-func flattenTree(r *repo.Repository, treeHash object.Hash, prefix string, result map[string]object.TreeEntry) {
+func flattenTree(r *repo.Repository, treeHash object.Hash, prefix string, result map[string]object.TreeEntry, sparseDirs map[string]object.Hash) {
 	t, err := r.ReadTree(treeHash)
 	if err != nil {
 		return
@@ -260,7 +271,13 @@ func flattenTree(r *repo.Repository, treeHash object.Hash, prefix string, result
 		entryPath := filepath.Join(prefix, e.Name)
 		entryPath = filepath.ToSlash(entryPath)
 		if e.Mode == object.ModeDirectory {
-			flattenTree(r, e.OID, entryPath, result)
+			// 若当前子目录在索引中被稀疏折叠，且 Tree OID 完全一致，则该目录下无任何暂存变更，直接跳过递归展开
+			if sparseDirs != nil {
+				if expectedOID, isSparse := sparseDirs[entryPath+"/"]; isSparse && expectedOID == e.OID {
+					continue
+				}
+			}
+			flattenTree(r, e.OID, entryPath, result, sparseDirs)
 		} else {
 			result[entryPath] = e
 		}
@@ -287,7 +304,10 @@ func splitLines(s string) []string {
 	return lines
 }
 
-func detectRenames(diffs []*FileDiff, threshold int) []*FileDiff {
+func detectRenames(r *repo.Repository, diffs []*FileDiff, threshold int) []*FileDiff {
+	if threshold <= 0 {
+		threshold = 50 // Git 默认 -M50% 相似度阈值
+	}
 	var deletes []*FileDiff
 	var adds []*FileDiff
 	var others []*FileDiff
@@ -313,7 +333,7 @@ func detectRenames(diffs []*FileDiff, threshold int) []*FileDiff {
 			if matchedAdds[j] {
 				continue
 			}
-			sim := calculateSimilarity(del, add)
+			sim := calculateSimilarity(r, del, add)
 			if sim >= threshold && sim > bestSim {
 				bestSim = sim
 				bestAddIdx = j
@@ -343,11 +363,60 @@ func detectRenames(diffs []*FileDiff, threshold int) []*FileDiff {
 	return append(others, finalRenames...)
 }
 
-func calculateSimilarity(del, add *FileDiff) int {
+// calculateSimilarity 计算删除与新增文件之间的相似度百分比 (0~100)
+func calculateSimilarity(r *repo.Repository, del, add *FileDiff) int {
 	if del.OldOID == add.NewOID {
 		return 100
 	}
-	return 50 // 基础内容相似度评级
+	if r == nil {
+		return 0
+	}
+	rawDel, err1 := r.ReadObject(del.OldOID)
+	rawAdd, err2 := r.ReadObject(add.NewOID)
+	if err1 != nil || err2 != nil || rawDel == nil || rawAdd == nil {
+		return 0
+	}
+
+	contentDel := rawDel.Content
+	contentAdd := rawAdd.Content
+
+	if len(contentDel) == 0 && len(contentAdd) == 0 {
+		return 100
+	}
+	if len(contentDel) == 0 || len(contentAdd) == 0 {
+		return 0
+	}
+
+	if isBinary(contentDel) || isBinary(contentAdd) {
+		if bytes.Equal(contentDel, contentAdd) {
+			return 100
+		}
+		return 0
+	}
+
+	delLines := splitLines(string(contentDel))
+	addLines := splitLines(string(contentAdd))
+	if len(delLines) == 0 && len(addLines) == 0 {
+		return 100
+	}
+	if len(delLines) == 0 || len(addLines) == 0 {
+		return 0
+	}
+
+	freqDel := make(map[string]int)
+	for _, l := range delLines {
+		freqDel[l]++
+	}
+	common := 0
+	for _, l := range addLines {
+		if freqDel[l] > 0 {
+			common++
+			freqDel[l]--
+		}
+	}
+
+	// 相似度公式：2 * common / (total_del + total_add) * 100
+	return (common * 200) / (len(delLines) + len(addLines))
 }
 
 func filterDiffs(diffs []*FileDiff, filter string) []*FileDiff {

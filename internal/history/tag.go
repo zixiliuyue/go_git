@@ -5,18 +5,21 @@ import (
 	"gogit/internal/object"
 	"gogit/internal/repo"
 	"gogit/internal/rev"
+	"gogit/internal/signature"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 type TagOptions struct {
 	Annotated bool
+	Sign      bool // 是否进行数字签名
 	Message   string
 	Target    string
 }
 
-// CreateTag 创建轻量或附注标签
+// CreateTag 创建轻量或附注标签（支持数字签名）
 func CreateTag(r *repo.Repository, tagName string, opts TagOptions) (object.Hash, error) {
 	targetOID, err := r.Refs.ResolveHEAD()
 	if opts.Target != "" {
@@ -33,6 +36,10 @@ func CreateTag(r *repo.Repository, tagName string, opts TagOptions) (object.Hash
 
 	refTargetOID := targetOID
 
+	if opts.Sign {
+		opts.Annotated = true
+	}
+
 	if opts.Annotated {
 		// 创建附注 Tag 对象
 		tagObj := &object.Tag{
@@ -44,6 +51,22 @@ func CreateTag(r *repo.Repository, tagName string, opts TagOptions) (object.Hash
 		}
 		if tagObj.Message == "" {
 			tagObj.Message = tagName
+		}
+
+		if opts.Sign {
+			signer, err := signature.NewSSHSigner(tagObj.Tagger.Email)
+			if err != nil {
+				return object.ZeroHash, fmt.Errorf("初始化标签签名器失败: %w", err)
+			}
+			rawPayload := tagObj.Serialize()
+			sigArmor, err := signer.Sign(rawPayload)
+			if err != nil {
+				return object.ZeroHash, fmt.Errorf("签署标签失败: %w", err)
+			}
+			if !strings.HasSuffix(tagObj.Message, "\n") {
+				tagObj.Message += "\n"
+			}
+			tagObj.Message = tagObj.Message + sigArmor + "\n"
 		}
 
 		tagHash, err := r.WriteObject(tagObj)

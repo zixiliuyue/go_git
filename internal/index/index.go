@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
-	"errors"
 	"fmt"
+	"gogit/internal/cleaner"
+	"gogit/internal/giterr"
 	"gogit/internal/object"
+	"gogit/internal/telemetry"
+	"gogit/internal/trace2"
 	"os"
 	"sort"
 	"strings"
@@ -54,33 +57,45 @@ func ReadIndex(path string) (*Index, error) {
 // ParseIndex 从原始字节流中解析 Git 索引文件。
 func ParseIndex(data []byte) (*Index, error) {
 	if len(data) < 12+20 { // 12字节头部 + 至少20字节SHA-1尾部
-		return nil, errors.New("索引文件过小，不符合 DIRC 格式规范")
+		return nil, fmt.Errorf("%w: 索引文件过小，不符合 DIRC 格式规范", giterr.ErrCorruptedIndex)
 	}
 
 	// 校验尾部 20 字节 SHA-1
 	contentLen := len(data) - 20
 	expectedChecksum := sha1.Sum(data[:contentLen])
 	if !bytes.Equal(expectedChecksum[:], data[contentLen:]) {
-		return nil, errors.New("索引文件校验和损坏 (SHA-1 mismatch)")
+		return nil, fmt.Errorf("%w: 索引文件校验和损坏 (SHA-1 mismatch)", giterr.ErrCorruptedIndex)
 	}
 
 	// 解析头部
 	if !bytes.Equal(data[0:4], IndexHeaderMagic[:]) {
-		return nil, fmt.Errorf("非法的索引魔数: %v", data[0:4])
+		return nil, fmt.Errorf("%w: 非法的索引魔数: %v", giterr.ErrCorruptedIndex, data[0:4])
 	}
 	version := binary.BigEndian.Uint32(data[4:8])
 	if version < 2 || version > 4 {
 		return nil, fmt.Errorf("不支持的索引版本: %d (仅支持 v2/v3/v4)", version)
 	}
 	numEntries := binary.BigEndian.Uint32(data[8:12])
-
-	idx := &Index{
-		Version:  version,
-		Entries:  make([]*IndexEntry, 0, numEntries),
-		Checksum: object.Hash(expectedChecksum),
+	if numEntries > 10_000_000 {
+		return nil, fmt.Errorf("索引条目数量 %d 超过安全上限", numEntries)
 	}
 
 	cur := data[12:contentLen]
+	// 基础条目至少占 62 字节，若声明条目数远大于理论最大容量则直接报错
+	if version != 4 && numEntries > uint32(len(cur)/62) {
+		return nil, fmt.Errorf("索引条目数量 %d 与实际剩余字节数 %d 不匹配", numEntries, len(cur))
+	}
+
+	initCap := numEntries
+	if initCap > 100_000 {
+		initCap = 100_000
+	}
+
+	idx := &Index{
+		Version:  version,
+		Entries:  make([]*IndexEntry, 0, initCap),
+		Checksum: object.Hash(expectedChecksum),
+	}
 	if version == 4 {
 		entries, consumed, err := ParseIndexV4(cur, numEntries)
 		if err != nil {
@@ -164,13 +179,17 @@ func (idx *Index) Serialize() ([]byte, error) {
 
 // WriteIndex 将索引安全原子地写入磁盘路径（使用 .lock 机制与重命名）。
 func (idx *Index) WriteIndex(path string) error {
+	defer trace2.Region("index", "write_index")()
+	telemetry.ForSubsystem("index").Debug("持久化索引文件", "path", path, "entries_count", len(idx.Entries))
 	lockPath := path + ".lock"
 
 	// 独占创建 lock 文件
 	lockFile, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
-		return fmt.Errorf("无法锁定索引文件 %s: %w", lockPath, err)
+		return &giterr.LockError{Path: lockPath, Err: err}
 	}
+	// 将锁文件登记至全局 cleaner，进程遭遇异常信号中断时自动清理该锁
+	unregLock := cleaner.Register(lockPath)
 
 	cleanup := true
 	defer func() {
@@ -198,6 +217,7 @@ func (idx *Index) WriteIndex(path string) error {
 	}
 
 	cleanup = false
+	unregLock()
 	return nil
 }
 
@@ -278,10 +298,13 @@ func (idx *Index) RemoveEntry(path string) bool {
 
 // WriteTree 将当前索引结构递归构建为 Git Tree 对象并保存到 objects 目录，返回根树哈希。
 func (idx *Index) WriteTree(objectsDir string) (object.Hash, error) {
+	defer trace2.Region("index", "write_tree")()
+	telemetry.ForSubsystem("index").Debug("从索引构建 Tree 对象", "entries_count", len(idx.Entries))
 	// 递归树节点结构
 	type treeNode struct {
-		subtrees map[string]*treeNode
-		files    map[string]*IndexEntry
+		subtrees        map[string]*treeNode
+		files           map[string]*IndexEntry
+		precomputedHash object.Hash // 若为稀疏目录折叠条目，直接复用其既有 Tree 哈希，无需解构文件
 	}
 
 	newNode := func() *treeNode {
@@ -298,6 +321,28 @@ func (idx *Index) WriteTree(objectsDir string) (object.Hash, error) {
 		if entry.Stage() != 0 {
 			return object.ZeroHash, fmt.Errorf("无法从含冲突未解决的索引生成 Tree (文件 %s 处于 stage %d)", entry.Path, entry.Stage())
 		}
+
+		if entry.IsSparseDirectory() {
+			// 稀疏目录格式形如 "dir/" 或 "a/b/dir/"，去除末尾斜杠定位路径
+			cleanPath := strings.TrimSuffix(entry.Path, "/")
+			parts := strings.Split(cleanPath, "/")
+			curr := root
+			for i := 0; i < len(parts)-1; i++ {
+				dirName := parts[i]
+				if _, ok := curr.subtrees[dirName]; !ok {
+					curr.subtrees[dirName] = newNode()
+				}
+				curr = curr.subtrees[dirName]
+			}
+			dirName := parts[len(parts)-1]
+			curr.subtrees[dirName] = &treeNode{
+				subtrees:        make(map[string]*treeNode),
+				files:           make(map[string]*IndexEntry),
+				precomputedHash: entry.OID,
+			}
+			continue
+		}
+
 		parts := strings.Split(entry.Path, "/")
 		curr := root
 		for i := 0; i < len(parts)-1; i++ {
@@ -314,6 +359,11 @@ func (idx *Index) WriteTree(objectsDir string) (object.Hash, error) {
 	// 递归序列化节点并写入 loose 存储
 	var buildTree func(node *treeNode) (object.Hash, error)
 	buildTree = func(node *treeNode) (object.Hash, error) {
+		// 稀疏目录直接返回其保存的 Tree 哈希
+		if !node.precomputedHash.IsZero() {
+			return node.precomputedHash, nil
+		}
+
 		var treeEntries []object.TreeEntry
 
 		// 处理子目录

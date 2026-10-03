@@ -19,6 +19,7 @@ func cmdTag(ctx *Context) int {
 	}
 
 	annotated := false
+	signTag := false
 	deleteTag := false
 	var message string
 	var deleteName string
@@ -32,6 +33,9 @@ func cmdTag(ctx *Context) int {
 			// 列表模式
 		case arg == "-a":
 			annotated = true
+		case arg == "-s" || arg == "--sign":
+			annotated = true
+			signTag = true
 		case arg == "-m" && i+1 < len(ctx.Args):
 			message = ctx.Args[i+1]
 			i++
@@ -75,6 +79,7 @@ func cmdTag(ctx *Context) int {
 
 	opts := history.TagOptions{
 		Annotated: annotated,
+		Sign:      signTag,
 		Message:   message,
 		Target:    targetCommit,
 	}

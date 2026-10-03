@@ -104,6 +104,9 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 	if err := binary.Read(tbr, binary.BigEndian, &count); err != nil {
 		return nil, object.ZeroHash, err
 	}
+	if count > 10_000_000 {
+		return nil, object.ZeroHash, fmt.Errorf("pack object count %d exceeds safety limit", count)
+	}
 
 	type rawEntry struct {
 		offset     uint64
@@ -113,6 +116,7 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 		baseOffset uint64
 		baseOID    object.Hash
 		isResolved bool
+		resolving  bool // 防止 Delta 恶意构造循环依赖形成死循环
 		resType    object.ObjectType
 		resContent []byte
 		finalOID   object.Hash
@@ -192,11 +196,21 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 	// 3. 递归/循环解析所有 Delta 对象
 	byOID := make(map[object.Hash]*rawEntry, count)
 
-	var resolve func(re *rawEntry) error
-	resolve = func(re *rawEntry) error {
+	const maxDeltaDepth = 50
+	var resolve func(re *rawEntry, depth int) error
+	resolve = func(re *rawEntry, depth int) error {
 		if re.isResolved {
 			return nil
 		}
+		if re.resolving {
+			return fmt.Errorf("detected circular delta dependency at offset %d", re.offset)
+		}
+		if depth > maxDeltaDepth {
+			return fmt.Errorf("delta chain exceeds maximum depth %d at offset %d", maxDeltaDepth, re.offset)
+		}
+
+		re.resolving = true
+		defer func() { re.resolving = false }()
 
 		if re.typeCode != TypeOFSDelta && re.typeCode != TypeREFDelta {
 			// 基础普通对象
@@ -220,7 +234,7 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 			if !ok {
 				return fmt.Errorf("ofs_delta base at %d not found in pack", re.baseOffset)
 			}
-			if err := resolve(baseEntry); err != nil {
+			if err := resolve(baseEntry, depth+1); err != nil {
 				return err
 			}
 			baseType = baseEntry.resType
@@ -231,7 +245,7 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 			if !ok {
 				return fmt.Errorf("ref_delta base %s not found in pack", re.baseOID.String())
 			}
-			if err := resolve(baseEntry); err != nil {
+			if err := resolve(baseEntry, depth+1); err != nil {
 				return err
 			}
 			baseType = baseEntry.resType
@@ -253,7 +267,7 @@ func ReadPack(rawReader io.Reader) ([]ResolvedObject, object.Hash, error) {
 
 	resolvedList := make([]ResolvedObject, len(entries))
 	for i, re := range entries {
-		if err := resolve(re); err != nil {
+		if err := resolve(re, 0); err != nil {
 			return nil, object.ZeroHash, err
 		}
 		resolvedList[i] = ResolvedObject{

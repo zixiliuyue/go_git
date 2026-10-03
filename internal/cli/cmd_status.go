@@ -13,10 +13,28 @@ func init() {
 
 func cmdStatus(ctx *Context) int {
 	porcelain := false
+	untrackedMode := worktree.UntrackedNormal
 
-	for _, arg := range ctx.Args {
+	for i := 0; i < len(ctx.Args); i++ {
+		arg := ctx.Args[i]
 		if arg == "--porcelain" || strings.HasPrefix(arg, "--porcelain=") {
 			porcelain = true
+		} else if arg == "-uall" || arg == "--untracked-files=all" {
+			untrackedMode = worktree.UntrackedAll
+		} else if arg == "-uno" || arg == "--untracked-files=no" {
+			untrackedMode = worktree.UntrackedNo
+		} else if arg == "-unormal" || arg == "--untracked-files=normal" || arg == "-u" {
+			untrackedMode = worktree.UntrackedNormal
+		} else if arg == "--untracked-files" && i+1 < len(ctx.Args) {
+			val := ctx.Args[i+1]
+			i++
+			if val == "all" {
+				untrackedMode = worktree.UntrackedAll
+			} else if val == "no" {
+				untrackedMode = worktree.UntrackedNo
+			} else {
+				untrackedMode = worktree.UntrackedNormal
+			}
 		}
 	}
 
@@ -26,7 +44,7 @@ func cmdStatus(ctx *Context) int {
 		return ExitFatal
 	}
 
-	st, err := worktree.ComputeStatus(r)
+	st, err := worktree.ComputeStatusWithOptions(r, worktree.StatusOptions{Untracked: untrackedMode})
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr, "fatal: 计算状态失败: %v\n", err)
 		return ExitFatal

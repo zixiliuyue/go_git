@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"gogit/internal/object"
+	"gogit/internal/telemetry"
+	"gogit/internal/trace2"
 	"hash/crc32"
 	"sort"
 )
@@ -20,6 +22,8 @@ type PackableObject struct {
 
 // BuildPack 将一组对象打包为标准 Git packfile (v2) 与对应的 .idx (v2) 数据
 func BuildPack(objects []PackableObject) (packBytes []byte, idxBytes []byte, packChecksum object.Hash, err error) {
+	defer trace2.Region("pack", "build_pack")()
+	telemetry.ForSubsystem("pack").Debug("构建 packfile", "objects_count", len(objects))
 	// 1. 对象排序策略：按 Type 优先级分组（commit -> tree -> blob -> tag），同类型按尺寸相近排序以利于压缩
 	sort.Slice(objects, func(i, j int) bool {
 		tOrder := func(ot object.ObjectType) int {

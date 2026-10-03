@@ -5,6 +5,7 @@ import (
 	"gogit/internal/hook"
 	"gogit/internal/object"
 	"gogit/internal/repo"
+	"gogit/internal/signature"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,8 @@ func cmdCommit(ctx *Context) int {
 	var message string
 	amend := false
 	var authorOverride string
+	signCommit := false
+	_ = signCommit
 
 	for i := 0; i < len(ctx.Args); i++ {
 		arg := ctx.Args[i]
@@ -30,6 +33,12 @@ func cmdCommit(ctx *Context) int {
 			amend = true
 		} else if strings.HasPrefix(arg, "--author=") {
 			authorOverride = strings.TrimPrefix(arg, "--author=")
+		} else if arg == "-S" || arg == "--gpg-sign" {
+			signCommit = true
+		} else if strings.HasPrefix(arg, "-S") {
+			signCommit = true
+		} else if strings.HasPrefix(arg, "--gpg-sign=") {
+			signCommit = true
 		}
 	}
 
@@ -142,6 +151,11 @@ func cmdCommit(ctx *Context) int {
 		message += "\n"
 	}
 
+	// 检查配置是否默认开启 gpgsign
+	if !signCommit && r.Config != nil && r.Config.Get("commit", "gpgsign") == "true" {
+		signCommit = true
+	}
+
 	// 4. 创建并写入 Commit 对象
 	commit := &object.Commit{
 		Tree:      treeHash,
@@ -149,6 +163,23 @@ func cmdCommit(ctx *Context) int {
 		Author:    author,
 		Committer: committer,
 		Message:   message,
+	}
+
+	// 若开启了提交签名（-S 或 commit.gpgSign 配置）
+	if signCommit {
+		// 生成未经签名的标准 Commit 待签载荷
+		unsignedPayload := commit.Serialize()
+		signer, err := signature.NewSSHSigner(author.Email)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "fatal: 初始化签名器失败: %v\n", err)
+			return ExitFatal
+		}
+		sigArmor, err := signer.Sign(unsignedPayload)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "fatal: 签署提交失败: %v\n", err)
+			return ExitFatal
+		}
+		commit.GPGSig = sigArmor
 	}
 
 	commitHash, err := r.WriteObject(commit)

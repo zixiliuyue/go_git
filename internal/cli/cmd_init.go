@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"gogit/internal/object"
 	"gogit/internal/repo"
 	"strings"
 )
@@ -14,6 +15,7 @@ func cmdInit(ctx *Context) int {
 	bare := false
 	initialBranch := "master"
 	targetDir := "."
+	objFormat := "sha1"
 
 	for i := 0; i < len(ctx.Args); i++ {
 		arg := ctx.Args[i]
@@ -24,12 +26,17 @@ func cmdInit(ctx *Context) int {
 			i++
 		} else if strings.HasPrefix(arg, "--initial-branch=") {
 			initialBranch = strings.TrimPrefix(arg, "--initial-branch=")
+		} else if strings.HasPrefix(arg, "--object-format=") {
+			objFormat = strings.TrimPrefix(arg, "--object-format=")
+		} else if arg == "--object-format" && i+1 < len(ctx.Args) {
+			objFormat = ctx.Args[i+1]
+			i++
 		} else if !strings.HasPrefix(arg, "-") {
 			targetDir = arg
 		}
 	}
 
-	r, err := repo.InitRepository(targetDir, bare, initialBranch)
+	r, err := repo.InitRepositoryWithFormat(targetDir, bare, initialBranch, object.ObjectFormat(objFormat))
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr, "fatal: 初始化仓库失败: %v\n", err)
 		return ExitFatal

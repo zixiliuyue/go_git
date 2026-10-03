@@ -11,9 +11,10 @@ func init() {
 	Register("sparse-checkout", cmdSparseCheckout)
 }
 
+// cmdSparseCheckout 实现 gogit sparse-checkout [init|set|list|disable]
 func cmdSparseCheckout(ctx *Context) int {
 	if len(ctx.Args) == 0 {
-		fmt.Fprintln(ctx.Stderr, "usage: gogit sparse-checkout [init|set|list|disable]")
+		fmt.Fprintln(ctx.Stderr, "usage: gogit sparse-checkout [init|set|list|disable] [--cone] [--sparse-index]")
 		return ExitUsage
 	}
 
@@ -33,20 +34,31 @@ func cmdSparseCheckout(ctx *Context) int {
 	switch sub {
 	case "init":
 		cone := false
+		sparseIndex := false
 		for _, arg := range ctx.Args[1:] {
 			if arg == "--cone" {
 				cone = true
+			} else if arg == "--sparse-index" {
+				sparseIndex = true
 			}
 		}
-		if err := worktree.InitSparseCheckout(r, cone); err != nil {
+		if err := worktree.InitSparseCheckout(r, cone, sparseIndex); err != nil {
 			fmt.Fprintf(ctx.Stderr, "fatal: 初始化 sparse-checkout 失败: %v\n", err)
 			return ExitFatal
 		}
 		return ExitSuccess
 
 	case "set":
-		paths := ctx.Args[1:]
-		if err := worktree.SetSparseCheckout(r, paths); err != nil {
+		sparseIndex := false
+		var paths []string
+		for _, arg := range ctx.Args[1:] {
+			if arg == "--sparse-index" {
+				sparseIndex = true
+			} else {
+				paths = append(paths, arg)
+			}
+		}
+		if err := worktree.SetSparseCheckout(r, paths, sparseIndex); err != nil {
 			fmt.Fprintf(ctx.Stderr, "fatal: 设置 sparse-checkout 失败: %v\n", err)
 			return ExitFatal
 		}

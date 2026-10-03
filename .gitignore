@@ -1,5 +1,7 @@
 # 二进制与构建产物
 bin/
+build/
+dist/
 /gogit
 *.exe
 *.test

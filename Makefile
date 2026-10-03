@@ -1,4 +1,4 @@
-.PHONY: all build test bench verify clean
+.PHONY: all build test difftest bench verify sbom provenance verify-provenance clean
 
 BIN_DIR := bin
 BIN_NAME := gogit
@@ -14,11 +14,24 @@ build:
 test:
 	go test -v ./...
 
+difftest:
+	go test -v ./test/differential/...
+
 bench:
 	./bench/perf.sh
 
 verify:
 	./test/verify_all.sh
 
+sbom:
+	./scripts/generate_sbom.sh
+
+provenance: build
+	./scripts/generate_provenance.sh
+	./scripts/generate_sbom.sh
+
+verify-provenance: provenance
+	./scripts/verify_provenance.sh
+
 clean:
-	rm -rf $(BIN_DIR) /tmp/gogit
+	rm -rf $(BIN_DIR) build /tmp/gogit

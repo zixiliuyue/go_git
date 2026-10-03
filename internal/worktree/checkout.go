@@ -65,16 +65,25 @@ func CheckoutSwitch(r *repo.Repository, target string, opts CheckoutOptions) err
 	targetFiles := make(map[string]object.TreeEntry)
 	flattenTree(r, targetCommit.Tree, "", targetFiles)
 
+	// 2.1 加载当前 HEAD 树对象（用于判断哪些文件未发生变更，从而安全保留工作区与索引中未提交的本地改动）
+	curTreeFiles := make(map[string]object.TreeEntry)
+	curHeadHash, headErr := r.Refs.ResolveHEAD()
+	if headErr == nil && !curHeadHash.IsZero() {
+		if curCommit, err := r.ReadCommit(curHeadHash); err == nil {
+			flattenTree(r, curCommit.Tree, "", curTreeFiles)
+		}
+	}
+
 	// 3. 读取当前索引与工作区
 	curIdx, err := r.GetIndex()
 	if err != nil {
 		curIdx = index.NewIndex()
 	}
 
-	// 4. 清理旧索引中存在但在目标提交中不存在的工作区文件
-	for _, entry := range curIdx.Entries {
-		if _, exists := targetFiles[entry.Path]; !exists {
-			absPath := filepath.Join(r.WorkTree, entry.Path)
+	// 4. 清理旧提交中存在但在目标提交中不存在的工作区文件
+	for p := range curTreeFiles {
+		if _, exists := targetFiles[p]; !exists {
+			absPath := filepath.Join(r.WorkTree, p)
 			_ = os.Remove(absPath)
 		}
 	}
@@ -82,12 +91,25 @@ func CheckoutSwitch(r *repo.Repository, target string, opts CheckoutOptions) err
 	// 5. 检出目标树中的所有文件到工作区，并重建索引
 	newIdx := index.NewIndex()
 	for p, te := range targetFiles {
+		absPath := filepath.Join(r.WorkTree, p)
+
+		// 检查该文件是否在当前提交与目标提交中完全相同（OID 与 Mode 一致）
+		curTe, inCur := curTreeFiles[p]
+		unchangedInTree := inCur && curTe.OID == te.OID && curTe.Mode == te.Mode
+
+		if unchangedInTree && !opts.Force {
+			// 若两端树内容完全一致且未指定强制覆盖，保留工作区现状及已有索引条目，不强制覆盖写磁盘
+			if existingEntry, ok := curIdx.FindEntry(p); ok {
+				newIdx.AddOrReplaceEntry(existingEntry)
+				continue
+			}
+		}
+
 		rawObj, err := r.ReadObject(te.OID)
 		if err != nil {
 			return fmt.Errorf("读取对象 %s 失败: %w", te.OID.String(), err)
 		}
 
-		absPath := filepath.Join(r.WorkTree, p)
 		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
 			return err
 		}

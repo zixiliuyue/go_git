@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# test/verify_all.sh - 全量自动化最终验收脚本 (验收清单 1~13)
+# test/verify_all.sh - 全量自动化最终验收脚本 (验收清单 1~15)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_GOGIT="/tmp/gogit"
 
-echo "=== [0/13] 编译最新 gogit 二进制 ==="
+echo "=== [0/15] 编译最新 gogit 二进制 ==="
 go build -o "${BIN_GOGIT}" "${ROOT_DIR}/cmd/gogit"
 
 TEMP_VERIFY_DIR="$(mktemp -d /tmp/gogit_final_verify_XXXXXX)"
@@ -227,12 +227,24 @@ print("-> 损坏 index 文件防护测试成功，未崩溃，正常拦截错误
 '
 echo "验收项 12 通过!"
 
-echo "=== [13/13] 验收项 13: 回归基线（全项目单元测试全部通过） ==="
+echo "=== [13/15] 验收项 13: 回归基线（全项目单元测试全部通过） ==="
 cd "${ROOT_DIR}"
-go test ./... > /dev/null
+go test ./...
 echo "验收项 13 通过!"
+
+echo "=== [14/15] 验收项 14: 维度六·差分模糊测试（双轨预言机 100% 对齐） ==="
+cd "${ROOT_DIR}"
+go test ./test/differential/...
+echo "验收项 14 通过!"
+
+echo "=== [15/15] 验收项 15: 维度六·SLSA 供应链级别认证与构建产物出处（Level 3 & SBOM） ==="
+cd "${ROOT_DIR}"
+./scripts/generate_provenance.sh
+./scripts/generate_sbom.sh
+./scripts/verify_provenance.sh
+echo "验收项 15 通过!"
 
 echo ""
 echo "=========================================================="
-echo "   🎉 最终验收清单 (1~13) 全部 100% 自动化通过! 🎉      "
+echo "   🎉 最终验收清单 (1~15) 全部 100% 自动化通过! 🎉      "
 echo "=========================================================="
